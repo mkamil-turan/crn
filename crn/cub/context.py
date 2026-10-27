@@ -21,7 +21,7 @@ H. tRNA ve kodon bağlamı:
 gen kopya sayısıdır; ``trna_counts`` (antikodon 5'→3' -> kopya sayısı) ile
 verilir ve GtRNAdb FASTA dosyasından ``read_trna_counts`` ile okunabilir.
 Kodonun 3. bazını okuyan antikodonlar ve wobble cezaları s,
-``crn.io.crn_io_const`` içindeki ``TAI_WOBBLE_PAIRS`` ve ``TAI_S_VALUES``
+``crn.tables`` içindeki ``TAI_WOBBLE_PAIRS`` ve ``TAI_S_VALUES``
 sabitleridir (genomdaki A34 inozin kabul edilir). ``kingdom="prokaryote"``
 ise AUA kodonu lizidinli tRNA-Ile CAU'dan da (L:A) okunur. Met kodonları
 (başlatıcı tRNA ile karışmasın diye) ve stop kodonları hesaba girmez. W'si 0
@@ -45,7 +45,7 @@ Kullanım::
 
     from crn.cub import CUB, CodonContext, read_trna_counts
 
-    ctx = CodonContext(cub, reference=CUB(genes=host_genes))
+    ctx = CodonContext(cub, reference=CUB(host_genes))
     ctx.tai(gene="MEFV_NM_000243.3", trna_counts=read_trna_counts("hg38-tRNAs.fa"))
     ctx.rho(gene="MEFV_NM_000243.3", frame="31")["CG"]
     ctx.cpb(gene="MEFV_NM_000243.3")
@@ -55,16 +55,20 @@ from __future__ import annotations
 import math
 import re
 import warnings
+from functools import cached_property
 from pathlib import Path
-from typing import (Dict, List, Mapping, Optional, Sequence)
+from typing import Dict, Mapping, Optional
 
-from crn.io.crn_io_const import (Maps, CODONS, RNA_BASES, TAI_S_VALUES, TAI_WOBBLE_PAIRS)
-from crn.cub.crn_cub_counts import (CUB, CubWarning)
-from crn.cub.crn_cub_composition import Composition
+from crn.constants import RNA_BASES, DNA_TO_RNA, RNA_COMPLEMENT
+from crn.tables import TAI_S_VALUES, TAI_WOBBLE_PAIRS
+from crn.cub.core import CUB, CubWarning
+from crn.cub.composition import Composition
+from crn.cub.synonymous import check_cub
 
 
-# Dinükleotit sayımında kullanılabilecek konum çiftleri (None: dizinin tamamı).
-DINUCLEOTIDE_FRAMES = (None, "12", "23", "31")
+# Dinükleotit sayımında kullanılabilecek konum çiftleri (None: dizinin tamamı)
+# ve her birinde f(X), f(Y) için kullanılan kodon konumları.
+DINUCLEOTIDE_FRAMES = {None: (None, None), "12": (1, 2), "23": (2, 3), "31": (3, 1)}
 # tAI'de lizidin (L:A) kuralının uygulandığı canlı grubu.
 TAI_KINGDOMS = ("eukaryote", "prokaryote")
 # GtRNAdb FASTA başlıkları: ">Homo_sapiens_tRNA-Ala-AGC-1-1 ..." ya da ">... Ala (AGC) 73 bp ...".
@@ -77,9 +81,8 @@ _TRNA_SKIPPED = frozenset({"Undet", "Sup", "SeC", "Pseudo"})
 def read_trna_counts(file_name: str | Path) -> Dict[str, int]:
     """GtRNAdb FASTA dosyasından antikodon başına tRNA gen kopya sayısı (tGCN).
 
-    Antikodonlar 5'→3' RNA alfabesiyle döner (ör. ``"AGC"`` -> ``"AGC"``,
-    ``"TTC"`` -> ``"UUC"``). Belirsiz, baskılayıcı ve selenosistein tRNA'ları
-    sayılmaz.
+    Antikodonlar 5'->3' RNA alfabesiyle döner (``"TTC"`` -> ``"UUC"``).
+    Belirsiz, baskılayıcı ve selenosistein tRNA'ları sayılmaz.
     """
     counts: Dict[str, int] = {}
     with open(file_name, encoding="utf-8") as handle:
@@ -91,22 +94,22 @@ def read_trna_counts(file_name: str | Path) -> Dict[str, int]:
                 if match:
                     amino_acid, anticodon = match.groups()
                     if amino_acid not in _TRNA_SKIPPED:
-                        anticodon = anticodon.translate(Maps.CODING_TO_RNA_MAP.value)
+                        anticodon = anticodon.translate(DNA_TO_RNA)
                         counts[anticodon] = counts.get(anticodon, 0) + 1
                     break
     return counts
 
 
 def _anticodon(codon: str, first: str) -> str:
-    """Kodonun 1. ve 2. bazını eşleyen, 34. bazı ``first`` olan antikodon (5'→3')."""
-    return first + codon[1::-1].translate(Maps.DEFAULT_COMPLEMENT_MAP_FOR_RNA.value)
+    """Kodonun 1. ve 2. bazını eşleyen, 34. bazı ``first`` olan antikodon (5'->3')."""
+    return first + codon[1::-1].translate(RNA_COMPLEMENT)
 
 
 class CodonContext:
     """Bir ``CUB`` nesnesinin tRNA havuzuna uyumu ve kodon bağlamı.
 
-    Metotlar ``CUB`` ile aynı biçimde ``gene`` verilmezse tüm genleri
-    birlikte, verilirse yalnızca o geni hesaplar.
+    Metotlar ``gene`` verilmezse tüm genleri birlikte, verilirse yalnızca o
+    geni hesaplar.
 
     Args:
         cub: Kodonları hazırlanmış ``CUB`` nesnesi.
@@ -117,50 +120,36 @@ class CodonContext:
     """
 
     def __init__(self, cub: CUB, reference: Optional[CUB] = None):
-        self.__composition = Composition(cub)
-        reference = cub if reference is None else reference
-        if not isinstance(reference, CUB):
-            raise TypeError(f"reference bir CUB olmalı, {type(reference).__name__} verildi")
-        self.__reference = reference
-
-    @property
-    def cub(self) -> CUB:
-        return self.__composition.cub
-
-    @property
-    def reference(self) -> CUB:
-        return self.__reference
-
-    @staticmethod
-    def _names(cub: CUB, gene: Optional[str]) -> List[str]:
-        return [g.name for g in cub.genes] if gene is None else [gene]
+        self.composition = Composition(cub)
+        self.cub = cub
+        self.reference = cub if reference is None else reference
+        check_cub("reference", self.reference)
 
     # --- 32. tAI ---------------------------------------------------------------------
 
     def trna_weights(self, trna_counts: Mapping[str, float],
                      s_values: Mapping[str, float] = TAI_S_VALUES,
-                     kingdom: str = "eukaryote",
-                     codons: Sequence[str] = CODONS) -> Dict[str, float]:
+                     kingdom: str = "eukaryote") -> Dict[str, float]:
         """32. Her kodonun tAI ağırlığı w = W / W_en büyük, W = Σ (1 − s)·tGCN.
 
         Args:
-            trna_counts: Antikodon (5'→3', T ya da U) -> tRNA gen kopya sayısı.
+            trna_counts: Antikodon (5'->3', T ya da U) -> tRNA gen kopya sayısı.
             s_values: Wobble cezaları; anahtarlar ``TAI_S_VALUES`` ile aynı.
             kingdom: ``"eukaryote"`` ya da ``"prokaryote"`` (AUA için L:A).
 
         Returns:
-            Met ve stop dışındaki kodonların w'si.
+            Met ve stop dışındaki kodonların w'si; W'si 0 olanlara diğer w'lerin
+            geometrik ortalaması verilir.
 
         Raises:
             ValueError: kingdom geçersizse ya da hiçbir kodon için tRNA yoksa.
         """
         if kingdom not in TAI_KINGDOMS:
             raise ValueError(f"kingdom {', '.join(TAI_KINGDOMS)} olmalı, {kingdom!r} verildi")
-        trna = {anticodon.upper().translate(Maps.CODING_TO_RNA_MAP.value): n
-                for anticodon, n in trna_counts.items()}
+        trna = {anticodon.upper().translate(DNA_TO_RNA): n for anticodon, n in trna_counts.items()}
         table = self.cub.genetic_code.table
         raw: Dict[str, float] = {}
-        for codon in self.cub.sense_codons(codons):
+        for codon in self.cub.genetic_code.sense_codons:
             if table[codon] == "M":
                 continue
             raw[codon] = sum((1 - s_values[key]) * trna.get(_anticodon(codon, first), 0)
@@ -177,8 +166,7 @@ class CodonContext:
         return {codon: (w if w > 0 else mean) for codon, w in weights.items()}
 
     def tai(self, gene: Optional[str] = None, trna_counts: Optional[Mapping[str, float]] = None,
-            s_values: Mapping[str, float] = TAI_S_VALUES, kingdom: str = "eukaryote",
-            codons: Sequence[str] = CODONS) -> float:
+            s_values: Mapping[str, float] = TAI_S_VALUES, kingdom: str = "eukaryote") -> float:
         """32. tAI: genin kodonlarının tAI ağırlıklarının geometrik ortalaması.
 
         Raises:
@@ -187,7 +175,7 @@ class CodonContext:
         if not trna_counts:
             raise ValueError("trna_counts verilmeli: antikodon -> tRNA gen kopya sayısı "
                              "(read_trna_counts ile GtRNAdb dosyasından okunabilir)")
-        weights = self.trna_weights(trna_counts, s_values, kingdom, codons)
+        weights = self.trna_weights(trna_counts, s_values, kingdom)
         counts = self.cub.codon_counts(gene, list(weights))
         total = sum(counts.values())
         if not total:
@@ -197,7 +185,6 @@ class CodonContext:
     # --- 33. Dinükleotit ρ -----------------------------------------------------------
 
     def dinucleotide_counts(self, gene: Optional[str] = None, frame: Optional[str] = None,
-                            codons: Sequence[str] = CODONS,
                             bases: str = RNA_BASES) -> Dict[str, int]:
         """33. Kodlayan dizideki dinükleotit sayıları (stop kodonları hariç).
 
@@ -209,9 +196,10 @@ class CodonContext:
         """
         if frame not in DINUCLEOTIDE_FRAMES:
             raise ValueError(f"frame None, '12', '23' ya da '31' olmalı, {frame!r} verildi")
-        sense = set(self.cub.sense_codons(codons))
+        sense = set(self.cub.genetic_code.sense_codons)
         counts = {x + y: 0 for x in bases for y in bases}
-        for name in self._names(self.cub, gene):
+        names = self.cub.names if gene is None else [gene]
+        for name in names:
             reading = self.cub.codons(name)
             for i, codon in enumerate(reading):
                 if codon not in sense:
@@ -229,18 +217,17 @@ class CodonContext:
         return counts
 
     def rho(self, gene: Optional[str] = None, frame: Optional[str] = None,
-            codons: Sequence[str] = CODONS, bases: str = RNA_BASES) -> Dict[str, float]:
+            bases: str = RNA_BASES) -> Dict[str, float]:
         """33. Dinükleotit göreli bolluğu ρ(XY) = f(XY) / (f(X)·f(Y)); 1 beklenen düzey.
 
         Returns:
             Dinükleotit -> ρ; bazlardan biri hiç geçmiyorsa ``nan``.
         """
-        counts = self.dinucleotide_counts(gene, frame, codons, bases)
+        counts = self.dinucleotide_counts(gene, frame, bases)
         total = sum(counts.values())
-        first, second = {None: (None, None), "12": (1, 2),
-                         "23": (2, 3), "31": (3, 1)}[frame]
-        fx = self.__composition.nucleotide_freqs(gene, first, codons, bases)
-        fy = self.__composition.nucleotide_freqs(gene, second, codons, bases)
+        first, second = DINUCLEOTIDE_FRAMES[frame]
+        fx = self.composition.nucleotide_freqs(gene, first, bases=bases)
+        fy = self.composition.nucleotide_freqs(gene, second, bases=bases)
         result = {}
         for pair, n in counts.items():
             expected = fx[pair[0]] * fy[pair[1]]
@@ -249,33 +236,13 @@ class CodonContext:
 
     # --- 34. CPS ve CPB --------------------------------------------------------------
 
-    def codon_pair_counts(self, cub: Optional[CUB] = None, gene: Optional[str] = None,
-                          codons: Sequence[str] = CODONS) -> Dict[str, int]:
-        """34. Komşu kodon çiftlerinin sayıları, 6 harflik anahtarla (ör. ``"GCCGAA"``).
-
-        Args:
-            cub: Sayılacak gen seti; verilmezse ``self.cub``.
-        """
-        cub = self.cub if cub is None else cub
-        sense = set(cub.sense_codons(codons))
-        counts: Dict[str, int] = {}
-        for name in self._names(cub, gene):
-            reading = cub.codons(name)
-            for a, b in zip(reading, reading[1:]):
-                if a in sense and b in sense:
-                    counts[a + b] = counts.get(a + b, 0) + 1
-        return counts
-
-    def codon_pair_scores(self, codons: Sequence[str] = CODONS) -> Dict[str, float]:
-        """34. Referansta geçen her kodon çiftinin CPS'si.
-
-        CPS = ln [N(AB) / (N(A)·N(B) / (N(X)·N(Y)) × N(XY))], tüm sayımlar
-        referanstan.
-        """
+    @cached_property
+    def _pair_scores(self) -> Dict[str, float]:
         table = self.cub.genetic_code.table
-        pairs = self.codon_pair_counts(self.reference, None, codons)
-        codon_n = self.reference.codon_counts(None, codons)
-        aa_n = self.reference.amino_acid_counts(codons=codons)
+        reference = self.reference
+        pairs = reference.codon_pair_counts()
+        codon_n = reference.codon_counts()
+        aa_n = reference.amino_acid_counts()
         aa_pairs: Dict[str, int] = {}
         for pair, n in pairs.items():
             key = table[pair[:3]] + table[pair[3:]]
@@ -288,14 +255,22 @@ class CodonContext:
             scores[pair] = math.log(n / expected)
         return scores
 
-    def cpb(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def codon_pair_scores(self) -> Dict[str, float]:
+        """34. Referansta geçen her kodon çiftinin CPS'si (sonuç önbelleğe alınır).
+
+        CPS = ln [N(AB) / (N(A)·N(B) / (N(X)·N(Y)) × N(XY))], tüm sayımlar
+        referanstan.
+        """
+        return dict(self._pair_scores)
+
+    def cpb(self, gene: Optional[str] = None) -> float:
         """34. CPB: genin kodon çiftlerinin CPS ortalaması.
 
-        Returns:
-            CPB; hesaba girecek çift yoksa ``nan``.
+        Referansta hiç geçmeyen çiftler çıkarılır ve ``CubWarning`` ile
+        bildirilir. Hesaba girecek çift yoksa ``nan``.
         """
-        scores = self.codon_pair_scores(codons)
-        pairs = self.codon_pair_counts(None, gene, codons)
+        scores = self._pair_scores
+        pairs = self.cub.codon_pair_counts(gene)
         missing = [pair for pair in pairs if pair not in scores]
         if missing:
             warnings.warn(f"CPB: referansta hiç geçmeyen {len(missing)} kodon çifti "

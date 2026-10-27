@@ -1,35 +1,9 @@
-from enum import Enum
+"""Protein ve tRNA ölçümlerinin sayısal tabloları.
 
-__all__ = ["Maps", "GeneticCode", "DNA_ALPHABET", "RNA_ALPHABET", "PRT_ALPHABET",
-           "DNA_BASES", "RNA_BASES", "CODONS", "AMINO_ACIDS", "STOP_SYMBOL",
-           "AMINO_ACID_GROUPS", "RESIDUE_AVERAGE_MASS", "RESIDUE_MONOISOTOPIC_MASS",
-           "WATER_AVERAGE_MASS", "WATER_MONOISOTOPIC_MASS",
-           "ELEMENTS", "AMINO_ACID_FORMULAS", "WATER_FORMULA",
-           "POSITIVE_RESIDUES", "NEGATIVE_RESIDUES", "IONIZABLE_POSITIVE",
-           "IONIZABLE_NEGATIVE", "PKA_SETS",
-           "HYDROPATHY_SCALES", "BOMAN_SCALE", "EXTINCTION_COEFFICIENTS_280",
-           "RESIDUE_SPECIFIC_VOLUMES", "RESIDUE_VOLUMES", "RESIDUE_MAX_ASA",
-           "IVYWREL_RESIDUES", "CVP_CHARGED", "CVP_POLAR", "TURN_FORMING_RESIDUES",
-           "TOP_IDP_SCALE", "TAI_S_VALUES", "TAI_WOBBLE_PAIRS",
-           "TRANSCRIPT_PRIORITY"]
-
-# IUPAC nükleotit kodları ve boşluk (gap) karakteri.
-DNA_ALPHABET = frozenset("ACGTRYKMSWBDHVN-")
-# RNA'da T yerine U kullanılır; diğer IUPAC kodları aynıdır.
-RNA_ALPHABET = frozenset("ACGURYKMSWBDHVN-")
-# 20 standart amino asit, IUPAC belirsizlik kodları (B=Asx, Z=Glx, J=Xle,
-# X=herhangi), U=selenosistein, O=pirolizin, '*' stop ve '-' boşluk.
-PRT_ALPHABET = frozenset("ACDEFGHIKLMNPQRSTVWY" "BZJXUO" "*-")
-
-# Belirsizliği olmayan bazlar, NCBI genetik kod tablolarının sırasıyla.
-DNA_BASES = "TCAG"
-RNA_BASES = "UCAG"
-# 64 kodon (RNA), RNA_BASES sırasıyla: UUU, UUC, UUA, UUG, UCU, ... GGG.
-CODONS = tuple(a + b + c for a in RNA_BASES for b in RNA_BASES for c in RNA_BASES)
-# 20 standart amino asit, tek harfli kodlarıyla, alfabetik.
-AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
-# Kodon tablolarında ve proteinlerde stop kodonunun simgesi.
-STOP_SYMBOL = "*"
+Her tablo kaynağıyla birlikte verilir; ölçüm fonksiyonlarına parametre olarak
+girer ve değiştirilebilir. Doğrulanamamış değerler için
+``docs/dogrulanacak_sabitler.md`` dosyasına bakın.
+"""
 
 # Amino asit grupları. Alifatik, aromatik, küçük, bazik ve asidik gruplar
 # yaygın tanımlardır; hidrofobik ve polar gruplar EMBOSS pepstats'ın
@@ -206,79 +180,3 @@ TAI_WOBBLE_PAIRS = {
     "A": (("U", "U:A"), ("A", "I:A")),
     "G": (("C", "C:G"), ("U", "U:G")),
 }
-
-# Aynı CDS'i veren izoformlardan hangisinin tutulacağı: RefSeq önekleri,
-# öncelik sırasıyla (NM_ deneysel kanıtlı, XM_ öngörülen mRNA). Listede
-# olmayan önekler en sona kalır.
-TRANSCRIPT_PRIORITY = ("NM_", "XM_")
-
-class Maps(Enum):
-
-    # IUPAC tümleyicileri: R<->Y, K<->M, B<->V, D<->H; S, W, N ve '-' kendisidir.
-    DEFAULT_COMPLEMENT_MAP_FOR_DNA = str.maketrans("ACGTRYKMSWBDHVN-",
-                                                   "TGCAYRMKSWVHDBN-")
-    # Aynı IUPAC kuralları, T yerine U ile: A<->U, G<->C.
-    DEFAULT_COMPLEMENT_MAP_FOR_RNA = str.maketrans("ACGURYKMSWBDHVN-",
-                                                   "UGCAYRMKSWVHDBN-")
-    # Ters transkripsiyon: RNA'dan tümleyici cDNA (A->T, U->A, G->C, C->G).
-    REVERSE_TRANSCRIPTION_MAP = str.maketrans("ACGURYKMSWBDHVN-",
-                                              "TGCAYRMKSWVHDBN-")
-    # Transkripsiyon, kalıp (template) zincirden: tümleyici RNA (A->U, T->A, G->C, C->G).
-    TRANSCRIPTION_MAP = str.maketrans("ACGTRYKMSWBDHVN-",
-                                      "UGCAYRMKSWVHDBN-")
-    # Transkripsiyon, kodlayan (coding) zincirden: dizi aynı kalır, yalnızca T->U.
-    CODING_TO_RNA_MAP = str.maketrans("T", "U")
-    # mRNA'dan kodlayan zincir dizisine: yalnızca U->T.
-    RNA_TO_CODING_MAP = str.maketrans("U", "T")
-
-
-def _codon_table(amino_acids: str) -> dict:
-    """NCBI biçimindeki 64 harflik amino asit dizisinden kodon tablosu kurar.
-
-    Kodonlar CODONS ile aynı sırada dizilir: UUU, UUC, UUA, UUG, UCU, ... GGG.
-    """
-    return {
-        a + b + c: amino_acids[16 * i + 4 * j + k]
-        for i, a in enumerate(RNA_BASES)
-        for j, b in enumerate(RNA_BASES)
-        for k, c in enumerate(RNA_BASES)
-    }
-
-
-class GeneticCode(Enum):
-    """Translasyon ve ORF aramasında kullanılan genetik kodlar.
-
-    Değer: (NCBI tablo no, ad, kodon tablosu, başlangıç kodonları).
-    Kodonlar RNA alfabesiyle (U) yazılır; stop kodonları ``*`` ile gösterilir.
-    """
-
-    # NCBI tablo 1. AUG dışındaki başlangıç kodonları: UUG, CUG, GUG.
-    STANDARD = (
-        1, "Standard",
-        _codon_table("FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG"),
-        frozenset({"AUG", "UUG", "CUG", "GUG"}),
-    )
-    # NCBI tablo 2. Farklar: UGA=Trp, AUA=Met, AGA ve AGG=stop.
-    VERTEBRATE_MITOCHONDRIAL = (
-        2, "Vertebrate Mitochondrial",
-        _codon_table("FFLLSSSSYY**CCWWLLLLPPPPHHQQRRRRIIMMTTTTNNKKSS**VVVVAAAADDEEGGGG"),
-        frozenset({"AUG", "AUU", "AUC", "AUA", "GUG"}),
-    )
-
-    def __repr__(self) -> str:
-        return f"<GeneticCode.{self.name}: NCBI {self.value[0]}, {self.value[1]}>"
-
-    @property
-    def table(self) -> dict:
-        """Kodon -> amino asit sözlüğü (RNA kodonları)."""
-        return self.value[2]
-
-    @property
-    def starts(self) -> frozenset:
-        """AUG dahil tüm başlangıç kodonları (RNA kodonları)."""
-        return self.value[3]
-
-    @property
-    def stops(self) -> frozenset:
-        """Stop kodonları (RNA kodonları)."""
-        return frozenset(c for c, aa in self.value[2].items() if aa == STOP_SYMBOL)

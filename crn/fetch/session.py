@@ -2,7 +2,7 @@
 NCBI E-utilities için HTTP oturum yöneticisi.
 
 Bu modül, NCBI'a yapılan istekleri rate limiting, otomatik retry ve
-connection pooling ile yönetir. ``crn.fetch.crn_fetch_ncbi.Ncbi`` tarafından
+connection pooling ile yönetir. ``crn.fetch.Ncbi`` tarafından
 kullanılır.
 """
 

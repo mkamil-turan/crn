@@ -66,14 +66,13 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import (Dict, List, Optional, Sequence, Tuple)
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
-from matplotlib.axes import Axes
+from crn.cub.core import CUB
+from crn.cub.composition import Composition
 
-from crn.io.crn_io_const import CODONS
-from crn.cub.crn_cub_counts import CUB
-from crn.cub.crn_cub_composition import Composition
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 
 # Grafik ayarları: eksen sınırları, eğri çözünürlüğü, nokta ve çizgi biçimleri.
@@ -87,8 +86,9 @@ PLOT_LABEL_SIZE = 7
 
 
 def _axes(ax: Optional[Axes]) -> Axes:
-    """Verilen ``Axes``'i, yoksa yeni bir şeklin ``Axes``'ini döner."""
+    """Verilen ``Axes``'i, yoksa yeni bir şeklin ``Axes``'ini döner (matplotlib burada yüklenir)."""
     if ax is None:
+        import matplotlib.pyplot as plt
         _, ax = plt.subplots(figsize=(5, 4.5))
     return ax
 
@@ -138,24 +138,17 @@ class EffectiveCodons:
     """
 
     def __init__(self, cub: CUB):
-        self.__composition = Composition(cub)
-
-    @property
-    def cub(self) -> CUB:
-        return self.__composition.cub
-
-    def _names(self) -> List[str]:
-        return [gene.name for gene in self.cub.genes]
+        self.composition = Composition(cub)
+        self.cub = cub
 
     # --- 23-25. ENC ------------------------------------------------------------------
 
-    def homozygosity(self, gene: Optional[str] = None,
-                     codons: Sequence[str] = CODONS) -> Dict[str, float]:
+    def homozygosity(self, gene: Optional[str] = None) -> Dict[str, float]:
         """23. Her eş anlamlı amino asidin F değeri: (nΣp² − 1) / (n − 1).
 
         n < 2 olan amino asitler dönmez.
         """
-        counts = self.cub.codon_counts(gene, codons)
+        counts = self.cub.codon_counts(gene)
         result = {}
         for aa, family in self.cub.codon_families().items():
             if len(family) < 2:
@@ -167,14 +160,14 @@ class EffectiveCodons:
             result[aa] = (n * sum_p2 - 1) / (n - 1)
         return result
 
-    def enc(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def enc(self, gene: Optional[str] = None) -> float:
         """23. Etkin kodon sayısı Nc (Wright 1990); 20 aşırı yanlılık, 61 yanlılık yok.
 
         Returns:
             Nc; bir dejenerelik sınıfı için F bulunamazsa ``nan``.
         """
         families = self.cub.codon_families()
-        f_values = {aa: f for aa, f in self.homozygosity(gene, codons).items() if f > 0}
+        f_values = {aa: f for aa, f in self.homozygosity(gene).items() if f > 0}
 
         classes: Dict[int, List[str]] = {}
         for aa, family in families.items():
@@ -198,24 +191,24 @@ class EffectiveCodons:
             if size not in means:
                 return math.nan
             nc += len(amino_acids) / means[size]
-        return min(nc, float(len(self.cub.sense_codons())))
+        return min(nc, float(len(self.cub.genetic_code.sense_codons)))
 
     @staticmethod
     def expected_enc(gc3s: float) -> float:
         """24. Yanlılık yalnızca GC3s'ten gelseydi beklenecek Nc: 2 + s + 29 / (s² + (1 − s)²)."""
         return 2 + gc3s + 29 / (gc3s ** 2 + (1 - gc3s) ** 2)
 
-    def enc_ratio(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def enc_ratio(self, gene: Optional[str] = None) -> float:
         """25. ENC oranı: (ENC_beklenen − ENC_gözlenen) / ENC_beklenen."""
-        expected = self.expected_enc(self.__composition.gc3s(gene, codons))
-        return (expected - self.enc(gene, codons)) / expected
+        expected = self.expected_enc(self.composition.gc3s(gene))
+        return (expected - self.enc(gene)) / expected
 
-    def enc_points(self, codons: Sequence[str] = CODONS) -> List[Dict[str, float | str]]:
+    def enc_points(self) -> List[Dict[str, float | str]]:
         """24-25. ENC–GC3s grafiği: her gen için GC3s, gözlenen ve beklenen ENC, ENC oranı."""
         points = []
-        for name in self._names():
-            gc3s = self.__composition.gc3s(name, codons)
-            observed = self.enc(name, codons)
+        for name in self.cub.names:
+            gc3s = self.composition.gc3s(name)
+            observed = self.enc(name)
             expected = self.expected_enc(gc3s)
             points.append({"gene": name, "gc3s": gc3s, "enc": observed,
                            "expected_enc": expected,
@@ -224,15 +217,15 @@ class EffectiveCodons:
 
     # --- 26-27. Grafikler ------------------------------------------------------------
 
-    def neutrality(self, codons: Sequence[str] = CODONS) -> Dict[str, object]:
+    def neutrality(self) -> Dict[str, object]:
         """26. Nötrallik grafiği: her gen için (GC3, GC12) ve GC12 = eğim·GC3 + kesişim.
 
         Returns:
             ``{"points": [{"gene", "gc3", "gc12"}, ...], "slope", "intercept",
             "r2"}``; iki genden azsa doğru ``nan``.
         """
-        points = [{"gene": name, "gc3": self.__composition.gc3(name, codons),
-                   "gc12": self.__composition.gc12(name, codons)} for name in self._names()]
+        points = [{"gene": name, "gc3": self.composition.gc3(name),
+                   "gc12": self.composition.gc12(name)} for name in self.cub.names]
         fit = _linear_regression([(p["gc3"], p["gc12"]) for p in points])
         return {"points": points, **fit}
 
@@ -249,17 +242,17 @@ class EffectiveCodons:
         """
         if codons is None:
             codons = self.cub.fourfold_codons()
-        third = self.__composition.nucleotide_counts(gene, 3, codons)
+        third = self.composition.nucleotide_counts(gene, 3, codons)
         gc, au = third["G"] + third["C"], third["A"] + third["U"]
         return {"x": third["G"] / gc if gc else 0.5, "y": third["A"] / au if au else 0.5}
 
     def pr2_points(self, codons: Optional[Sequence[str]] = None) -> List[Dict[str, float | str]]:
         """27. PR2 grafiği: her gen için (x, y)."""
-        return [{"gene": name, **self.pr2(name, codons)} for name in self._names()]
+        return [{"gene": name, **self.pr2(name, codons)} for name in self.cub.names]
 
     # --- Çizimler --------------------------------------------------------------------
 
-    def plot_enc(self, codons: Sequence[str] = CODONS, ax: Optional[Axes] = None,
+    def plot_enc(self, ax: Optional[Axes] = None,
                  labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
         """24. ENC–GC3s grafiği: genler ve Wright'ın beklenen ENC eğrisi.
 
@@ -269,19 +262,19 @@ class EffectiveCodons:
         ax = _axes(ax)
         s = [i / ENC_CURVE_STEPS for i in range(ENC_CURVE_STEPS + 1)]
         ax.plot(s, [self.expected_enc(v) for v in s], label="Beklenen ENC", **PLOT_CURVE_STYLE)
-        points = [(p["gc3s"], p["enc"], p["gene"]) for p in self.enc_points(codons)
+        points = [(p["gc3s"], p["enc"], p["gene"]) for p in self.enc_points()
                   if not math.isnan(p["enc"])]
         ax.set(xlim=(0, 1), ylim=ENC_AXIS_LIMITS, xlabel="GC3s", ylabel="ENC",
                title="ENC–GC3s")
         ax.legend(loc="lower center", frameon=False)
         return _finish(ax, points, labels, file_name)
 
-    def plot_enc_ratio(self, codons: Sequence[str] = CODONS, ax: Optional[Axes] = None,
+    def plot_enc_ratio(self, ax: Optional[Axes] = None,
                        bin_width: float = ENC_RATIO_BIN_WIDTH,
                        file_name: Optional[str | Path] = None) -> Axes:
         """25. ENC oranının frekans dağılımı; 0'dan uzaklaşan genler GC3s dışı etki taşır."""
         ax = _axes(ax)
-        ratios = [p["enc_ratio"] for p in self.enc_points(codons) if not math.isnan(p["enc_ratio"])]
+        ratios = [p["enc_ratio"] for p in self.enc_points() if not math.isnan(p["enc_ratio"])]
         if ratios:
             low = math.floor(min(ratios) / bin_width) * bin_width
             high = math.ceil(max(ratios) / bin_width) * bin_width
@@ -295,14 +288,14 @@ class EffectiveCodons:
             ax.figure.savefig(file_name, dpi=300, bbox_inches="tight")
         return ax
 
-    def plot_neutrality(self, codons: Sequence[str] = CODONS, ax: Optional[Axes] = None,
+    def plot_neutrality(self, ax: Optional[Axes] = None,
                         labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
         """26. Nötrallik grafiği: GC12 ~ GC3, regresyon doğrusu, denklem, R² ve y = x.
 
         Tek gende regresyon ``nan`` olduğundan yalnızca nokta çizilir.
         """
         ax = _axes(ax)
-        data = self.neutrality(codons)
+        data = self.neutrality()
         points = [(p["gc3"], p["gc12"], p["gene"]) for p in data["points"]]
         values = [v for x, y, _ in points for v in (x, y)]
         low, high = (min(values), max(values)) if values else (0.0, 1.0)

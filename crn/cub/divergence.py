@@ -43,7 +43,7 @@ Kullanım::
 
     from crn.cub import CUB, Divergence
 
-    div = Divergence(cub, reference=CUB(genes=host_genes))
+    div = Divergence(cub, reference=CUB(host_genes))
     div.scuo(gene="MEFV_NM_000243.3")
     div.rcdi(gene="MEFV_NM_000243.3")
 """
@@ -51,19 +51,19 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import (Dict, Optional, Sequence)
+from functools import cached_property
+from typing import Dict, Optional
 
-from crn.io.crn_io_const import CODONS
-from crn.cub.crn_cub_counts import (CUB, CubWarning)
-from crn.cub.crn_cub_composition import Composition
-from crn.cub.crn_cub_synonymous import Synonymous
+from crn.cub.core import CUB, CubWarning
+from crn.cub.composition import Composition
+from crn.cub.synonymous import Synonymous
 
 
 class Divergence:
     """Bir ``CUB`` nesnesinin kodon kullanımındaki düzensizlik ve sapma.
 
-    Metotlar ``CUB`` ile aynı biçimde ``gene`` verilmezse tüm genleri
-    birlikte, verilirse yalnızca o geni hesaplar.
+    Metotlar ``gene`` verilmezse tüm genleri birlikte, verilirse yalnızca o
+    geni hesaplar.
 
     Args:
         cub: Kodonları hazırlanmış ``CUB`` nesnesi.
@@ -74,68 +74,64 @@ class Divergence:
     """
 
     def __init__(self, cub: CUB, reference: Optional[CUB] = None):
-        self.__synonymous = Synonymous(cub, reference)
-        self.__composition = Composition(cub)
+        self.synonymous = Synonymous(cub, reference)
+        self.composition = Composition(cub)
+        self.cub = cub
+        self.reference = self.synonymous.reference
 
-    @property
-    def cub(self) -> CUB:
-        return self.__synonymous.cub
+    @cached_property
+    def _reference_ratio(self) -> Dict[str, float]:
+        return Synonymous(self.reference).codon_ratio()
 
-    @property
-    def reference(self) -> CUB:
-        return self.__synonymous.reference
-
-    def expected_codon_freqs(self, gene: Optional[str] = None,
-                             codons: Sequence[str] = CODONS) -> Dict[str, float]:
+    def expected_codon_freqs(self, gene: Optional[str] = None) -> Dict[str, float]:
         """Konum baz oranlarından beklenen kodon oranları: f1(x)·f2(y)·f3(z).
 
-        Stop kodonları gözlenen kodon oranlarında olmadığı için beklenen
-        oranlar da amino asit kodlayan kodonlar üzerinden toplamı 1 olacak
-        biçimde normalize edilir.
+        Stoplar gözlenen oranlarda olmadığından beklenen oranlar da amino asit
+        kodlayan kodonlar üzerinden toplamı 1 olacak biçimde normalize edilir.
         """
-        f = [self.__composition.nucleotide_freqs(gene, position, codons) for position in (1, 2, 3)]
+        f = [self.composition.nucleotide_freqs(gene, position) for position in (1, 2, 3)]
         products = {codon: f[0][codon[0]] * f[1][codon[1]] * f[2][codon[2]]
-                    for codon in self.cub.sense_codons(codons)}
+                    for codon in self.cub.genetic_code.sense_codons}
         total = sum(products.values())
         return {codon: (v / total if total else 0.0) for codon, v in products.items()}
 
     # --- G. Entropi ve sapma -----------------------------------------------------------
 
-    def scuo(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def scuo(self, gene: Optional[str] = None) -> float:
         """28. SCUO: amino asit payıyla ağırlıklı normalize entropi farkı, (Hmax − H) / Hmax."""
-        counts = self.cub.codon_counts(gene, codons)
+        counts = self.cub.codon_counts(gene)
         orders: Dict[str, float] = {}
         totals: Dict[str, int] = {}
-        for aa, family in self.cub.codon_families().items():
-            n = sum(counts.get(codon, 0) for codon in family)
+        for aa, family in self.cub.genetic_code.families.items():
+            n = sum(counts[codon] for codon in family)
             if len(family) < 2 or not n:
                 continue
             entropy = -sum(counts[codon] / n * math.log2(counts[codon] / n)
-                           for codon in family if counts.get(codon))
+                           for codon in family if counts[codon])
             h_max = math.log2(len(family))
             orders[aa] = (h_max - entropy) / h_max
             totals[aa] = n
         total = sum(totals.values())
         return sum(totals[aa] / total * orders[aa] for aa in orders) if total else 0.0
 
-    def cdc(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def cdc(self, gene: Optional[str] = None) -> float:
         """29. CDC: gözlenen ve beklenen kodon oranları arasındaki kosinüs uzaklığı (0-1)."""
-        observed = self.cub.codon_freqs(gene, codons)
-        expected = self.expected_codon_freqs(gene, codons)
+        observed = self.cub.codon_freqs(gene)
+        expected = self.expected_codon_freqs(gene)
         dot = sum(observed[c] * expected[c] for c in observed)
         norm = math.sqrt(sum(v * v for v in observed.values())) \
             * math.sqrt(sum(v * v for v in expected.values()))
         return 1 - dot / norm if norm else 0.0
 
-    def rcdi(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def rcdi(self, gene: Optional[str] = None) -> float:
         """30. RCDI: Σ (oran_gen / oran_ref) × N_kodon / N, eş anlamlı kodonlarda.
 
-        Returns:
-            RCDI; gende sayılabilecek kodon yoksa 0.
+        Referansta hiç geçmeyen kodonlar çıkarılır ve ``CubWarning`` ile
+        bildirilir. Gende sayılabilecek kodon yoksa 0.
         """
-        gene_ratio = self.__synonymous.codon_ratio(gene, codons)
-        reference_ratio = Synonymous(self.reference).codon_ratio(None, codons)
-        synonymous = self.cub.synonymous_codons(codons)
+        gene_ratio = self.synonymous.codon_ratio(gene)
+        reference_ratio = self._reference_ratio
+        synonymous = self.cub.synonymous_codons()
         counts = self.cub.codon_counts(gene, synonymous)
 
         missing = [c for c in synonymous if counts[c] and not reference_ratio[c]]
@@ -148,10 +144,10 @@ class Divergence:
             return 0.0
         return sum(gene_ratio[c] / reference_ratio[c] * counts[c] for c in used if counts[c]) / total
 
-    def rcbs(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def rcbs(self, gene: Optional[str] = None) -> float:
         """31. RCBS: genin kodonları üzerinden (1 + d)'nin geometrik ortalaması − 1."""
-        observed = self.cub.codon_freqs(gene, codons)
-        expected = self.expected_codon_freqs(gene, codons)
+        observed = self.cub.codon_freqs(gene)
+        expected = self.expected_codon_freqs(gene)
         counts = self.cub.codon_counts(gene, list(observed))
         total = sum(counts.values())
         if not total:
@@ -160,4 +156,4 @@ class Divergence:
         return math.exp(log_sum / total) - 1
 
     def __repr__(self) -> str:
-        return f"Divergence({self.__synonymous!r})"
+        return f"Divergence({self.synonymous!r})"

@@ -1,8 +1,6 @@
-# crn_io_features
+# Features
 
-`crn/io/crn_io_features.py` modülü, dizilere ait her türlü ek bilgiyi tutan **`Features`** sınıfını tanımlar.
-
-Örnek betik: [tests/io/test_features.py](../tests/io/test_features.py)
+`crn/features.py` modülü, dizilere ve genlere ait her türlü ek bilgiyi tutan **`Features`** sınıfını tanımlar.
 
 ## Amaç ve tasarım ilkesi
 
@@ -10,7 +8,7 @@
 
 - Bir dizinin nereden indirildiği, hangi gene ait olduğu, lokus tipi, versiyonu, strand bilgisi gibi **her türlü ek bilgi** `Features` içine yazılır.
 - Dizi sınıflarına bu bilgiler için **ayrı property eklenmez**. Yeni bir bilgi türü gerektiğinde sınıfı değiştirmek yerine yeni bir anahtar kullanılır.
-- İstisnalar (sınıfa doğrudan property olarak eklenmesi gereken bilgiler) tartışılarak belirlenir. Şu ana kadar kararlaştırılan root alanları: `_type` (tüm diziler), `strand` ve `maps` (DNA).
+- İstisnalar (sınıfa doğrudan property olarak eklenmesi gereken bilgiler) tartışılarak belirlenir. Şu ana kadar kararlaştırılan root alanları: `strand` (DNA ve RNA) ve `genomic_strand` (RNA).
 
 ```text
 Sequence / DNA / RNA / PRT
@@ -25,16 +23,14 @@ Sequence / DNA / RNA / PRT
 ## İçe aktarma
 
 ```python
-from crn.io import Features
-# veya
-from crn.io.crn_io_features import Features
+from crn import Features
 ```
 
 ## Veri modeli
 
 - Her **anahtar** boş olmayan bir `str` olmalıdır.
 - Her anahtar bir **değer listesi** tutar. Aynı anahtara birden fazla değer eklenebilir.
-- Değerler herhangi bir Python nesnesi olabilir (`str`, `int`, `tuple`, `Strand` enum'u vb.). CRN dosyasına yazılabilecek tipler: `None`, `bool`, `int`, `float`, `str`, `bytes`, `Molecule`/`Strand`/`GenomicStrand`/`Maps` ve bunlardan oluşan `tuple`/`list`.
+- Değerler herhangi bir Python nesnesi olabilir (`str`, `int`, `tuple`, `Strand` enum'u vb.). CRN dosyasına yazılabilecek tipler: `None`, `bool`, `int`, `float`, `str`, `bytes`, `Molecule`/`Strand`/`GenomicStrand`/`GeneticCode` ve bunlardan oluşan `tuple`/`list`.
 - Anahtarlar **eklenme sırasını korur**.
 - Okuma metotları (`get`, `items`, `to_dict`, `copy`) listelerin **kopyasını** döndürür. Dönen liste değiştirilse bile depo etkilenmez.
 
@@ -191,12 +187,12 @@ f.set("", "x")    # ValueError: Anahtar boş olamaz
 
 `get`, `first`, `remove` ve `in` geçersiz anahtarlarda hata vermez; sadece "bulunamadı" sonucunu döndürür (`None`, `default`, `False`).
 
-## `crn_io_type` ile birlikte kullanım
+## Enum'larla birlikte kullanım
 
-Tip ve yön bilgileri `str` yerine [`crn_io_type`](crn_io_type.md) içindeki enum'larla saklanmalıdır:
+Tip ve yön bilgileri `str` yerine `crn.seq` içindeki enum'larla saklanmalıdır (bkz. [kılavuz §3](kilavuz.md#3-sabitler-ve-enumlar)):
 
 ```python
-from crn.io import Features, Molecule, Strand, GenomicStrand
+from crn import Features, Molecule, Strand, GenomicStrand
 
 f = Features()
 f.set("molecule", Molecule.RNA)
@@ -212,7 +208,7 @@ f.first("genomic_strand").value[0]          # '-'
 Her `Sequence` (ve `DNA`) nesnesinin bir `features` alanı vardır:
 
 ```python
-from crn.io import DNA
+from crn import DNA
 
 d = DNA("ATGGATTTATCTGCTCTTCGC", name="BRCA1_part")
 d.features.set("source", "NCBI")

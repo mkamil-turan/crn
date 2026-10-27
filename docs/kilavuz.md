@@ -5,8 +5,9 @@ dönüşümleri (transkripsiyon, ters transkripsiyon, translasyon) yapan, ORF
 arayan, dizileri FASTA ve kendi ikili biçimi olan CRN ile okuyup yazan ve
 GENCODE ile NCBI'dan gen, transkript ve protein çeken bir Python paketidir.
 
-Bu kılavuz paketin tüm genel (public) sınıflarını ve metotlarını tek tek
-anlatır. Her metot için amacı, parametreleri, dönüş değeri, verdiği hatalar ve
+Bu kılavuz veri modelinin (`crn`) ve veri kaynaklarının (`crn.fetch`) genel
+(public) sınıflarını ve metotlarını tek tek anlatır. Kodon kullanımı (`crn.cub`)
+ve protein özellikleri (`ProteinProperties`) için [README](../README.md)'ye bakın. Her metot için amacı, parametreleri, dönüş değeri, verdiği hatalar ve
 çalıştırılmış örnekleri verilir. Örneklerdeki çıktılar gerçek çıktılardır.
 Paketin sınırlılıkları en sondaki bölümde toplanmıştır.
 
@@ -16,7 +17,7 @@ Paketin sınırlılıkları en sondaki bölümde toplanmıştır.
 
 1. [Kurulum ve içe aktarma](#1-kurulum-ve-içe-aktarma)
 2. [Temel tasarım ilkeleri](#2-temel-tasarım-ilkeleri)
-3. [Sabitler ve enum'lar](#3-sabitler-ve-enumlar) — `Molecule`, `Strand`, `GenomicStrand`, `Maps`, `GeneticCode`, alfabeler
+3. [Sabitler ve enum'lar](#3-sabitler-ve-enumlar) — `Molecule`, `Strand`, `GenomicStrand`, `GeneticCode`, tümleme tabloları, alfabeler
 4. [`Features`](#4-features) — ek bilgilerin deposu
 5. [`Sequence`](#5-sequence) — tüm dizilerin temel sınıfı
 6. [`DNA`](#6-dna)
@@ -38,8 +39,9 @@ Paketin sınırlılıkları en sondaki bölümde toplanmıştır.
 ### Gereksinimler
 
 - Python **3.12 veya üstü**.
-- Bağımlılıklar `pip` tarafından otomatik kurulur: `tqdm` (ilerleme çubukları)
-  ve `requests` (NCBI istekleri).
+- Bağımlılıklar `pip` tarafından otomatik kurulur: `tqdm` (ilerleme çubukları),
+  `requests` (NCBI istekleri) ve `matplotlib` (yalnızca CUB grafikleri çizilirken
+  yüklenir).
 
 ### Kurulum
 
@@ -65,37 +67,34 @@ yeniden kurulum gerektirmez.
 
 ```text
 crn/
-├── io/                       diziler ve kapsayıcılar
-│   ├── crn_io_type.py        Molecule, Strand, GenomicStrand
-│   ├── crn_io_const.py       Maps, GeneticCode, alfabeler
-│   ├── crn_io_features.py    Features
-│   ├── crn_io_seqs.py        Sequence ve CRN biçimi
-│   ├── crn_io_dna.py         DNA
-│   ├── crn_io_rna.py         RNA
-│   ├── crn_io_prt.py         PRT
-│   └── crn_io_gene.py        Gene
-└── fetch/                    veri kaynakları
-    ├── crn_fetch_session.py  NcbiSession
-    ├── crn_fetch_gencode.py  Gencode
-    └── crn_fetch_ncbi.py     Ncbi
-sys/                          indirilen veriler (Gencode ve Ncbi yazar)
+├── constants.py      alfabeler, kodonlar, tümleme tabloları, GeneticCode
+├── tables.py         kütleler, pKa, hidropati ölçekleri, tAI cezaları
+├── features.py       Features
+├── seq.py            Molecule, Strand, GenomicStrand, Sequence, DNA, RNA, PRT
+├── gene.py           Gene
+├── fileio.py         FASTA ve CRN biçimleri
+├── protein.py        ProteinProperties
+├── fetch/            veri kaynakları
+│   ├── session.py    NcbiSession
+│   ├── gencode.py    Gencode
+│   └── ncbi.py       Ncbi
+└── cub/              kodon kullanım yanlılığı (README'ye bakın)
+sys/                  indirilen veriler (Gencode ve Ncbi yazar; CRN_SYS_DIR ile değişir)
 ```
 
 ### İçe aktarma
 
 ```python
 # Diziler, kapsayıcılar ve sabitler
-from crn import (Molecule, Strand, GenomicStrand, Maps, GeneticCode,
+from crn import (Molecule, Strand, GenomicStrand, GeneticCode,
                  Features, Sequence, DNA, RNA, PRT, Gene)
 
 # Veri kaynakları
 from crn.fetch import Gencode, Ncbi, NcbiSession
 
-# Alfabeler (gerekirse)
-from crn.io.crn_io_const import DNA_ALPHABET, RNA_ALPHABET, PRT_ALPHABET
+# Alfabeler ve tümleme tabloları (gerekirse)
+from crn.constants import DNA_ALPHABET, RNA_ALPHABET, PRT_ALPHABET, DNA_COMPLEMENT
 ```
-
-`from crn.io import ...` da aynı adları verir.
 
 ---
 
@@ -122,14 +121,15 @@ bir bölüm olarak yazılır.
 
 | Sınıf | Root alanları |
 |---|---|
-| Tüm diziler | `_type` (bir `Molecule`), `name`, `seq` |
-| `DNA` | `strand`, `maps` |
-| `RNA` | `strand`, `genomic_strand`, `maps` |
+| Tüm diziler | `name`, `seq` (ve sınıf alanı `molecule`) |
+| `DNA` | `strand` |
+| `RNA` | `strand`, `genomic_strand` |
 | `PRT` | — |
 | `Gene` | `name`, `dna`, transkriptler, proteinler |
 
-`_type` başında alt çizgi olsa da okunması serbesttir:
-`DNA("ATG")._type is Molecule.DNA`.
+Molekül tipi sınıfın kendisindedir: `DNA("ATG").molecule is Molecule.DNA`.
+Bir sınıfın root alanları `root_types` sözlüğünde, bir nesneninkiler
+`root_fields()` ile okunur.
 
 ### 2.3. `strand` = yazılış yönü
 
@@ -187,26 +187,26 @@ belgelenmiş varsayılan değeri döndürür).
 
 ## 3. Sabitler ve enum'lar
 
-Tüm enum üyelerinin değeri bir `tuple`'dır. Karşılaştırmada `is` kullanın
+`Molecule` dışındaki enum üyelerinin değeri bir `tuple`'dır. Karşılaştırmada `is` kullanın
 (`x is Strand.FivePrime`). Adından üye almak için `Molecule["DNA"]` yazılır.
 
 ### 3.1. `Molecule` — molekül tipi
 
-**Ne için:** Her dizi nesnesinin `_type` alanında durur; dizinin DNA, RNA,
+**Ne için:** Her dizi sınıfının `molecule` alanında durur; dizinin DNA, RNA,
 protein ya da genel dizi olduğunu gösterir. CRN dosyası okunurken hangi
 sınıfın oluşturulacağı buna göre seçilir.
 
 | Üye | `value` | Kullanan sınıf |
 |---|---|---|
-| `Molecule.DNA` | `("Dna", "DNA")` | `DNA` |
-| `Molecule.RNA` | `("Rna", "RNA")` | `RNA` |
-| `Molecule.PRT` | `("Protein", "PRT")` | `PRT` |
-| `Molecule.SEQ` | `("Sequence", "SEQ")` | `Sequence` |
+| `Molecule.DNA` | `"DNA"` | `DNA` |
+| `Molecule.RNA` | `"RNA"` | `RNA` |
+| `Molecule.PRT` | `"PRT"` | `PRT` |
+| `Molecule.SEQ` | `"SEQ"` | `Sequence` |
 
 ```python
 >>> Molecule.DNA, Molecule.DNA.value, Molecule["PRT"]
-(Molecule.DNA, ('Dna', 'DNA'), Molecule.PRT)
->>> DNA("ATG")._type is Molecule.DNA
+(Molecule.DNA, 'DNA', Molecule.PRT)
+>>> DNA("ATG").molecule is Molecule.DNA
 True
 ```
 
@@ -218,6 +218,8 @@ True
 |---|---|
 | `Strand.FivePrime` | `("5'", "3'", "Five prime")` |
 | `Strand.ThreePrime` | `("3'", "5'", "Three prime")` |
+
+`Strand.FivePrime.flipped` ters yönü (`Strand.ThreePrime`) verir.
 
 ```python
 >>> start, end, label = Strand.FivePrime.value
@@ -240,29 +242,31 @@ strand sütunuyla aynı notasyonu kullanır.
 Örnek: MEFV geni kromozom 16'nın (−) zincirindedir; mRNA'sı yine 5'→3' yazılır:
 `RNA(..., strand=Strand.FivePrime, genomic_strand=GenomicStrand.Minus)`.
 
-### 3.4. `Maps` — çeviri tabloları
+### 3.4. Tümleme tabloları
 
-**Ne için:** Bazların birbirine dönüştürülmesi. Her üyenin `value`'su
-Python'un `str.translate` ile kullanılabilen bir tablodur.
+**Ne için:** Bazların birbirine dönüştürülmesi. `crn.constants` içindeki bu
+sabitler Python'un `str.translate` ile kullanılan tablolardır. Dizi sınıfları
+bunları kendisi seçer; elle kullanmak gerekmez.
 
-| Üye | Dönüşüm | Kullanıldığı yer |
+| Sabit | Dönüşüm | Kullanıldığı yer |
 |---|---|---|
-| `DEFAULT_COMPLEMENT_MAP_FOR_DNA` | A↔T, G↔C ve IUPAC: R↔Y, K↔M, B↔V, D↔H; S, W, N, `-` aynı kalır | `DNA` tümleme |
-| `DEFAULT_COMPLEMENT_MAP_FOR_RNA` | A↔U, G↔C ve aynı IUPAC kuralları | `RNA` tümleme |
-| `TRANSCRIPTION_MAP` | DNA kalıp zincirinden RNA: A→U, T→A, G→C, C→G (+IUPAC) | `DNA.transcription(template=True)` |
-| `CODING_TO_RNA_MAP` | Yalnızca T→U | `DNA.transcription(template=False)` |
-| `REVERSE_TRANSCRIPTION_MAP` | RNA'dan tümleyici DNA: A→T, U→A, G→C, C→G (+IUPAC) | `RNA.reverse_transcription()` |
+| `DNA_COMPLEMENT` | A↔T, G↔C ve IUPAC: R↔Y, K↔M, B↔V, D↔H; S, W, N, `-` aynı kalır | `DNA` tümleme |
+| `RNA_COMPLEMENT` | A↔U, G↔C ve aynı IUPAC kuralları | `RNA` tümleme |
+| `DNA_TO_RNA` | Yalnızca T→U | `DNA.transcription(template=False)` |
+| `RNA_TO_DNA` | Yalnızca U→T | RNA'dan kodlayan zincire |
+
+Kalıp zincirden transkripsiyon `DNA_COMPLEMENT` + `DNA_TO_RNA`, ters
+transkripsiyon `RNA_COMPLEMENT` + `RNA_TO_DNA` ile yapılır.
 
 ```python
->>> "ATGCRYN".translate(Maps.DEFAULT_COMPLEMENT_MAP_FOR_DNA.value)
+>>> from crn.constants import DNA_COMPLEMENT, DNA_TO_RNA
+>>> "ATGCRYN".translate(DNA_COMPLEMENT)
 'TACGYRN'
->>> "ATGC".translate(Maps.TRANSCRIPTION_MAP.value)
+>>> "ATGC".translate(DNA_COMPLEMENT).translate(DNA_TO_RNA)
 'UACG'
->>> "ATGC".translate(Maps.CODING_TO_RNA_MAP.value)
-'AUGC'
->>> "AUGC".translate(Maps.REVERSE_TRANSCRIPTION_MAP.value)
-'TACG'
 ```
+
+Sürüm 3 CRN dosyalarında bulunan eski `maps` alanı okunurken yok sayılır.
 
 ### 3.5. `GeneticCode` — genetik kodlar
 
@@ -281,6 +285,12 @@ ve stop kodonları. Kodonlar RNA alfabesiyle (U) yazılır; stop `*` ile göster
 | `table` | `{kodon: amino asit}` sözlüğü (64 kodon) |
 | `starts` | Başlangıç kodonlarının kümesi (`frozenset`) |
 | `stops` | Stop kodonlarının kümesi (`frozenset`) |
+| `sense_codons` | Amino asit kodlayan kodonlar (stop hariç; standartta 61) |
+| `families` | `{amino asit: kodonlar}` eş anlamlı kodon aileleri |
+| `synonymous_codons` | Amino asidi birden çok kodonla kodlanan kodonlar (standartta 59) |
+| `fourfold_codons` | 3. konumu tümüyle eş anlamlı kodonlar (standartta 32) |
+
+Türetilen kümeler ilk kullanımda bir kez hesaplanır.
 
 ```python
 >>> GeneticCode.STANDARD.table["AUG"]
@@ -295,7 +305,7 @@ ve stop kodonları. Kodonlar RNA alfabesiyle (U) yazılır; stop `*` ile göster
 
 ### 3.6. Alfabeler
 
-`crn.io.crn_io_const` içinde `frozenset` olarak tanımlıdır:
+`crn.constants` içinde `frozenset` olarak tanımlıdır:
 
 | Sabit | Karakterler |
 |---|---|
@@ -462,7 +472,7 @@ Kendi bilgileriniz için küçük harfli, `snake_case` anahtarlar kullanmanız �
 ## 5. `Sequence`
 
 **Ne için:** Tüm dizilerin temel sınıfı. Molekül tipi belli olmayan ya da
-alfabesi denetlenmeyecek diziler için doğrudan kullanılabilir (`_type` =
+alfabesi denetlenmeyecek diziler için doğrudan kullanılabilir (`molecule` =
 `Molecule.SEQ`). `DNA`, `RNA` ve `PRT` bu sınıftan türer ve bu bölümdeki her
 şey onlar için de geçerlidir.
 
@@ -494,10 +504,10 @@ uzun: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 | `seq` | Dizi metni | Yeni değer büyük harfe çevrilir ve (alt sınıflarda) alfabe denetlenir |
 | `name` | Ad | Serbest |
 | `features` | `Features` deposu | Yalnızca `Features` nesnesi atanabilir; aksi halde `TypeError` |
-| `_type` | `Molecule` üyesi | Değiştirmeyin |
+| `molecule` | `Molecule` üyesi (sınıf alanı) | Değiştirmeyin |
 
 ```python
->>> s.seq, s.name, s._type, len(s)
+>>> s.seq, s.name, s.molecule, len(s)
 ('ATGCGTACG', 'ornek', Molecule.SEQ, 9)
 ```
 
@@ -680,14 +690,13 @@ ValueError: hbb.crn: dosyadaki dizi tipi DNA, RNA sınıfı RNA tipi bekliyor
 **Ne için:** DNA dizileri. Tümleme, transkripsiyon ve ORF arama yapar.
 `Sequence`'in tüm özelliklerine sahiptir.
 
-### `DNA(seq, name="", strand=Strand.FivePrime, maps=Maps.DEFAULT_COMPLEMENT_MAP_FOR_DNA)`
+### `DNA(seq, name="", strand=Strand.FivePrime)`
 
 | Parametre | Açıklama |
 |---|---|
 | `seq` | Dizi; büyük harfe çevrilir, `DNA_ALPHABET` ile denetlenir. |
 | `name` | Ad. |
 | `strand` | Yazılış yönü (bkz. 2.3). |
-| `maps` | Tümleme tablosu. |
 
 **Hatalar:** Alfabe dışı karakterde `ValueError`; `strand` bir `Strand` değilse `TypeError`.
 
@@ -708,7 +717,6 @@ ValueError: DNA dizisinde geçersiz karakter(ler): 1
 | Özellik | Açıklama |
 |---|---|
 | `strand` | Okunur ve yazılır; yalnızca `Strand` kabul eder. |
-| `maps` | Yalnızca okunur. |
 
 ### `from_sequence(sequence) -> Self` (classmethod)
 
@@ -741,7 +749,7 @@ x: TTGG <4> [DNA] 3'->5'
 ### `complementary() -> Self`
 
 **Amaç:** Tümleyici zinciri **yeni** bir DNA olarak döndürür; orijinal
-değişmez. Yeni DNA aynı adı, maps'i ve features kopyasını taşır.
+değişmez. Yeni DNA aynı adı ve features kopyasını taşır.
 
 ```python
 >>> d.complementary()
@@ -752,10 +760,21 @@ HBB_parca: ATGGTGCATCTGACTCCTGAG <21> [DNA] 5'->3'
 'TACNYRMKVBHD'
 ```
 
-Ters tümleyeni (5'→3' yazılmış karşı zincir) bir metin olarak almak için:
-`d.complementary().seq[::-1]`.
+### `reverse_complement() -> Self`
 
-### `transcription(template=True, genomic_strand=GenomicStrand.Unknown, maps=None) -> RNA`
+**Amaç:** Karşı zinciri bu diziyle **aynı yönde** okunacak biçimde, yeni bir
+nesne olarak döndürür (5'→3' `ATGGCC` → 5'→3' `GGCCAT`). Strand değişmez.
+`RNA`'da da vardır.
+
+```python
+>>> DNA("ATGGCC", "d").reverse_complement()
+d: GGCCAT <6> [DNA] 5'->3'
+```
+
+Yalnızca dizinin 5'→3' okunuşu gerekiyorsa (boşluklar atılmış, 3'→5' yazılmışsa
+çevrilmiş): `d.seq_5to3()`.
+
+### `transcription(template=True, genomic_strand=GenomicStrand.Unknown) -> RNA`
 
 **Amaç:** DNA'dan RNA üretir (transkripsiyon).
 
@@ -764,7 +783,6 @@ Ters tümleyeni (5'→3' yazılmış karşı zincir) bir metin olarak almak içi
 | `template=True` | Bu DNA **kalıp** (antisense) zincirdir. RNA polimeraz gibi tümleyici RNA üretilir (A→U, T→A, G→C, C→G) ve strand ters çevrilir. |
 | `template=False` | Bu DNA **kodlayan** (sense) zincirdir. RNA aynı diziye sahiptir; yalnızca T→U yapılır ve strand korunur. NCBI/GENCODE'dan gelen gen ve CDS dizileri kodlayan zincirdir. |
 | `genomic_strand` | Oluşan RNA'nın `genomic_strand` alanı. |
-| `maps` | Dönüşüm tablosu; `None` ise `template`'e göre `TRANSCRIPTION_MAP` ya da `CODING_TO_RNA_MAP`. |
 
 Yeni RNA aynı adı ve features kopyasını taşır.
 
@@ -803,7 +821,7 @@ ilk stop kodonuyla biten dizi.
 | `alternative_starts` | `False`: yalnızca ATG. `True`: genetik kodun tüm başlangıç kodonları (standartta TTG, CTG, GTG da). |
 
 **Dönüş:** Konuma göre sıralı liste. Her ORF, **kodlayan yönde 5'→3'
-yazılmış** bir DNA'dır; adı `<ad>_ORF<n>`, maps'i ve features kopyasını
+yazılmış** bir DNA'dır; adı `<ad>_ORF<n>`, features kopyasını
 taşır. Features'a ek olarak:
 
 | Anahtar | Değer |
@@ -840,14 +858,13 @@ Bir `+` ORF'u orijinal diziden geri almak:
 
 **Ne için:** RNA dizileri. Tümleme, ters transkripsiyon ve translasyon yapar.
 
-### `RNA(seq, name="", strand=Strand.FivePrime, genomic_strand=GenomicStrand.Unknown, maps=Maps.DEFAULT_COMPLEMENT_MAP_FOR_RNA)`
+### `RNA(seq, name="", strand=Strand.FivePrime, genomic_strand=GenomicStrand.Unknown)`
 
 | Parametre | Açıklama |
 |---|---|
 | `seq` | Dizi; büyük harfe çevrilir, `RNA_ALPHABET` ile denetlenir (**T kabul edilmez**). |
 | `strand` | Yazılış yönü. |
 | `genomic_strand` | Transkript edildiği genomik zincir. |
-| `maps` | Tümleme tablosu. |
 
 **Hatalar:** Alfabe dışı karakterde `ValueError`; `strand`/`genomic_strand`
 yanlış tipteyse `TypeError`.
@@ -866,7 +883,6 @@ HBB_mRNA: AUGGUGCAUCUGACUCCUGAGGAGAAGUAA <30> [RNA] 5'->3' (-)
 |---|---|
 | `strand` | Okunur/yazılır; yalnızca `Strand`. |
 | `genomic_strand` | Okunur/yazılır; yalnızca `GenomicStrand`. |
-| `maps` | Yalnızca okunur. |
 
 ### `from_sequence(sequence) -> Self` (classmethod)
 
@@ -883,7 +899,7 @@ değişmez** (RNA'nın geldiği genomik zincir tümlemeyle değişmez).
 HBB_mRNA: UACCACGUAGACUGAGGACUCCUCUUCAUU <30> [RNA] 3'->5' (-)
 ```
 
-### `reverse_transcription(maps=Maps.REVERSE_TRANSCRIPTION_MAP) -> DNA`
+### `reverse_transcription() -> DNA`
 
 **Amaç:** Ters transkripsiyon: RNA'ya tümleyici, antiparalel ilk zincir cDNA'yı
 üretir (A→T, U→A, G→C, C→G). Sonuç RNA'nın altına hizalı yazılır; strand ters
@@ -934,6 +950,34 @@ Bir mRNA'nın yalnızca kodlayan bölgesini çevirmek için CDS'i keserek çevir
 ```python
 start, end = rna.features.first("cds")     # Gencode/Ncbi bu bilgiyi yazar
 protein = rna[start - 1:end].translation()
+```
+
+### `match_orf(protein, genetic_code=GeneticCode.STANDARD) -> RNA | None`
+
+**Amaç:** Çevirisi `protein` ile birebir aynı olan ORF'yi (AUG … stop) bulur;
+bir transkriptin kodlayan bölgesini (CDS) proteinden doğrulayarak çıkarmanın
+yoludur. Yalnızca RNA'nın kendi zincirine bakılır; sondaki stop simgesi iki
+tarafta da yok sayılır. Birden çok ORF uyarsa en baştaki seçilir.
+
+| Parametre | Açıklama |
+|---|---|
+| `protein` | `PRT` ya da tek harfli amino asit dizisi. |
+| `genetic_code` | Translasyon için genetik kod. |
+
+**Dönüş:** ORF'yi (stop dahil) 5'→3' yeni bir RNA olarak, uyan yoksa `None`.
+Yeni RNA bu RNA'nın adını, `genomic_strand`'ini ve features kopyasını taşır;
+`orf_start`, `orf_end` (bu RNA üzerinde 1 tabanlı) ve `cds = (1, uzunluk)`
+yazılır, `utr5` ve `utr3` silinir.
+
+```python
+>>> m = RNA("GGAUGGUGCAUCUGACUCCUGAGGAGAAGUAAGC", "HBB_mRNA", genomic_strand=GenomicStrand.Minus)
+>>> orf = m.match_orf("MVHLTPEEK")
+>>> orf
+HBB_mRNA: AUGGUGCAUCUGACUCCUGAGGAGAAGUAA <30> [RNA] 5'->3' (-)
+>>> orf.features.first("orf_start"), orf.features.first("orf_end")
+(3, 32)
+>>> m.match_orf("MVHL") is None      # stop'tan önce bitmiyor
+True
 ```
 
 ---
@@ -1075,6 +1119,43 @@ tid = "NM_000243.3"
 proteinler = [p for p in g.proteins.values() if p.features.first("transcript_id") == tid]
 ```
 
+### `isoforms(genetic_code=GeneticCode.STANDARD, unique_cds=True, priority=("NM_", "XM_")) -> list[Gene]`
+
+**Amaç:** Geni izoformlarına ayırır: her biri **bir genomik DNA, bir
+transkript, bir protein** içeren yeni genler. Kodon kullanımı hesabı
+(`crn.cub.CUB`) bu yapıyı ister. Bu gen değişmez.
+
+Her transkript için çevirisi bir proteinle birebir aynı ORF aranır
+(`RNA.match_orf`); önce kaynağın o transkripte bağladığı protein
+(`transcript_id` özelliği), sonra diğerleri denenir.
+
+| Parametre | Açıklama |
+|---|---|
+| `genetic_code` | ORF arama ve translasyon için genetik kod. |
+| `unique_cds` | `True` ise aynı CDS'i veren izoformlardan yalnızca biri tutulur. |
+| `priority` | Tutulacak izoformu seçerken transkript kimliği önekleri, öncelik sırasıyla; eşitlikte ilk eklenen. |
+
+**Dönüş:** Transkriptlerin ekleme sırasıyla izoform genleri. Adları
+`<gen>_<transkript>`; features genin kopyasıdır, ayrıca `isoform_of`,
+`transcript_id` ve `protein_id` yazılır. Transkript kırpılmaz; ORF konumu
+transkriptin `orf_start`/`orf_end` özelliklerindedir.
+
+**Uyarılar ve hatalar:** Proteini olmayan transkriptler, transkripti olmayan
+proteinler ve çıkarılan kopya izoformlar `UserWarning` ile bildirilir.
+Genomik DNA yoksa `ValueError`.
+
+```python
+>>> g = Gene("ORNEK", DNA("ATGAAAGCCTAGGG"))
+>>> g.add_transcript(RNA("CCAUGAAAGCCUAGGG"), "T1")
+>>> g.add_transcript(RNA("UUAUGAAAGCCUAGAA"), "T2")
+>>> g.add_transcript(RNA("GGGCCCUUU"), "T3")
+>>> g.add_protein(PRT("MKA"), "P1")
+>>> [(i.name, list(i.transcripts), list(i.proteins)) for i in g.isoforms()]
+UserWarning: ORNEK: proteini olmayan transkriptler: T3
+UserWarning: ORNEK: aynı CDS'i veren izoformlar çıkarıldı (T2 -> T1)
+[('ORNEK_T1', ['T1'], ['P1'])]
+```
+
 ### `to_crn(file_name) -> None`
 
 **Amaç:** Geni tüm içeriğiyle (ad, features, genomik DNA, transkriptler ve
@@ -1118,12 +1199,13 @@ kullanılmaz; dosyadan hiçbir kod çalıştırılmaz.
 | Bütünlük | Dosyanın sonunda CRC32 vardır; bozulmuş dosya okunmaz. |
 | Bir dizi dosyası | Tek bir dizi (`to_crn`/`from_crn`). |
 | Bir gen dosyası | Bir `Gene` ve içindeki tüm diziler (`Gene.to_crn`/`Gene.from_crn`). |
-| Ayrıntılı tanım | `crn/io/crn_io_seqs.py` dosyasının başındaki açıklama. |
+| Ayrıntılı tanım | `crn/fileio.py` dosyasının başındaki açıklama. |
 
 **Features ve root alanlarında izin verilen değer tipleri:**
 
 - `None`, `bool`, `int` (her büyüklükte), `float`, `str`, `bytes`
-- `Molecule`, `Strand`, `GenomicStrand`, `Maps`, `GeneticCode` enum üyeleri
+- `Molecule`, `Strand`, `GenomicStrand`, `GeneticCode` enum üyeleri (eski
+  dosyalardaki `Maps` değerleri `None` okunur)
 - Bunlardan oluşan `tuple` ve `list` (iç içe olabilir)
 
 `dict`, `set`, kendi sınıflarınız gibi diğer tipler `TypeError` verir.
@@ -1744,7 +1826,7 @@ for sembol in ["MEFV", "TP53", "BRCA1", "CFTR"]:
 ### Diziler ve dönüşümler
 
 1. **FASTA kayıplıdır.** `to_fasta` yalnızca adı ve diziyi yazar; tip,
-   `strand`, `genomic_strand`, `maps` ve features dosyaya geçmez. FASTA'dan
+   `strand`, `genomic_strand` ve features dosyaya geçmez. FASTA'dan
    okunan her dizi `FivePrime` kabul edilir; 3'→5' yazılmış bir dizi FASTA'ya
    yazılıp okunursa yönü yanlış yorumlanır. Kayıpsız saklama için CRN kullanın.
 2. **FASTA adı tek kelime olmalıdır.** Boşluklu adla `to_fasta` hata verir;

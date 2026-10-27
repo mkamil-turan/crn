@@ -1,4 +1,4 @@
-from crn.io import DNA, Strand
+from crn import DNA, Strand
 
 
 dna1 = DNA(seq="atgcatgcatgc", strand=Strand.FivePrime)

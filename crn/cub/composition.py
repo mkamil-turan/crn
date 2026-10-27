@@ -29,17 +29,17 @@ Kullanım::
 
     from crn.cub import CUB, Composition
 
-    cub = CUB(genes=isoforms)
+    cub = CUB(isoforms)
     comp = Composition(cub)
     comp.gc3s(gene="MEFV_NM_000243.3")
     comp.summary()                          # tüm genler birlikte, 6-13 hepsi
 """
 from __future__ import annotations
 
-from typing import (Dict, Optional, Sequence)
+from typing import Dict, Optional, Sequence
 
-from crn.io.crn_io_const import (CODONS, RNA_BASES)
-from crn.cub.crn_cub_counts import CUB
+from crn.constants import CODONS, RNA_BASES
+from crn.cub.core import CUB
 
 
 def _ratio(part: float, total: float) -> float:
@@ -49,11 +49,8 @@ def _ratio(part: float, total: float) -> float:
 class Composition:
     """Bir ``CUB`` nesnesinin nükleotit bileşimi.
 
-    Metotlar ``CUB`` ile aynı biçimde ``gene`` verilmezse tüm genleri
-    birlikte, verilirse yalnızca o geni hesaplar.
-
-    Args:
-        cub: Kodonları hazırlanmış ``CUB`` nesnesi.
+    Metotlar ``gene`` verilmezse tüm genleri birlikte, verilirse yalnızca o
+    geni hesaplar.
 
     Raises:
         TypeError: cub bir CUB değilse.
@@ -62,11 +59,7 @@ class Composition:
     def __init__(self, cub: CUB):
         if not isinstance(cub, CUB):
             raise TypeError(f"cub bir CUB olmalı, {type(cub).__name__} verildi")
-        self.__cub = cub
-
-    @property
-    def cub(self) -> CUB:
-        return self.__cub
+        self.cub = cub
 
     # --- Temel sayım ----------------------------------------------------------
 
@@ -77,8 +70,7 @@ class Composition:
         """``codons`` içindeki amino asit kodlayan kodonlarda baz sayıları.
 
         Args:
-            position: None ise kodonun üç konumu birden; 1, 2 ya da 3 ise
-                yalnızca o konum.
+            position: None ise kodonun üç konumu birden; 1, 2 ya da 3 ise o konum.
             codons: Sayıma girecek kodonlar (stoplar her durumda çıkarılır).
             bases: Sayılacak bazlar, sırasıyla.
 
@@ -87,9 +79,8 @@ class Composition:
         """
         if position not in (None, 1, 2, 3):
             raise ValueError(f"position 1, 2, 3 ya da None olmalı, {position!r} verildi")
-        sense = self.__cub.sense_codons(codons)
         counts = dict.fromkeys(bases, 0)
-        for codon, n in self.__cub.codon_counts(gene, sense).items():
+        for codon, n in self.cub.codon_counts(gene, self.cub.sense_codons(codons)).items():
             for base in (codon if position is None else codon[position - 1]):
                 if base in counts:
                     counts[base] += n
@@ -105,60 +96,57 @@ class Composition:
         return {base: _ratio(n, total) for base, n in counts.items()}
 
     def _gc(self, gene: Optional[str], position: Optional[int],
-            codons: Sequence[str]) -> float:
+            codons: Sequence[str] = CODONS) -> float:
         freqs = self.nucleotide_freqs(gene, position, codons)
         return freqs["G"] + freqs["C"]
 
     # --- B. Nükleotit bileşimi --------------------------------------------------
 
-    def gc_percent(self, gene: Optional[str] = None,
-                   codons: Sequence[str] = CODONS) -> float:
+    def gc_percent(self, gene: Optional[str] = None) -> float:
         """6. GC%: (G + C) / toplam nükleotit × 100."""
-        return self._gc(gene, None, codons) * 100
+        return self._gc(gene, None) * 100
 
-    def gc1(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def gc1(self, gene: Optional[str] = None) -> float:
         """7. GC1: kodonların 1. konumundaki G + C / L."""
-        return self._gc(gene, 1, codons)
+        return self._gc(gene, 1)
 
-    def gc2(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def gc2(self, gene: Optional[str] = None) -> float:
         """8. GC2: kodonların 2. konumundaki G + C / L."""
-        return self._gc(gene, 2, codons)
+        return self._gc(gene, 2)
 
-    def gc12(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def gc12(self, gene: Optional[str] = None) -> float:
         """9. GC12: (GC1 + GC2) / 2."""
-        return (self.gc1(gene, codons) + self.gc2(gene, codons)) / 2
+        return (self.gc1(gene) + self.gc2(gene)) / 2
 
-    def gc3(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def gc3(self, gene: Optional[str] = None) -> float:
         """10. GC3: kodonların 3. konumundaki G + C / L."""
-        return self._gc(gene, 3, codons)
+        return self._gc(gene, 3)
 
-    def base3s(self, gene: Optional[str] = None,
-               codons: Sequence[str] = CODONS) -> Dict[str, float]:
-        """12. A3s, U3s, G3s, C3s: eş anlamlı kodonlarda 3. konumdaki baz / eş anlamlı kodon sayısı."""
-        return self.nucleotide_freqs(gene, 3, self.__cub.synonymous_codons(codons))
-
-    def gc3s(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def gc3s(self, gene: Optional[str] = None) -> float:
         """11. GC3s: eş anlamlı kodonlarda (Met, Trp ve stop hariç) 3. konum G + C."""
-        return self._gc(gene, 3, self.__cub.synonymous_codons(codons))
+        return self._gc(gene, 3, self.cub.synonymous_codons())
 
-    def at3s(self, gene: Optional[str] = None, codons: Sequence[str] = CODONS) -> float:
+    def base3s(self, gene: Optional[str] = None) -> Dict[str, float]:
+        """12. A3s, U3s, G3s, C3s: eş anlamlı kodonlarda 3. konumdaki baz / eş anlamlı kodon sayısı."""
+        return self.nucleotide_freqs(gene, 3, self.cub.synonymous_codons())
+
+    def at3s(self, gene: Optional[str] = None) -> float:
         """13. AT3s: 1 − GC3s."""
-        return 1 - self.gc3s(gene, codons)
+        return 1 - self.gc3s(gene)
 
-    def summary(self, gene: Optional[str] = None,
-                codons: Sequence[str] = CODONS) -> Dict[str, float]:
+    def summary(self, gene: Optional[str] = None) -> Dict[str, float]:
         """6-13 arasındaki tüm ölçümler tek sözlükte."""
-        base3s = self.base3s(gene, codons)
+        base3s = self.base3s(gene)
         return {
-            "GC%": self.gc_percent(gene, codons),
-            "GC1": self.gc1(gene, codons),
-            "GC2": self.gc2(gene, codons),
-            "GC12": self.gc12(gene, codons),
-            "GC3": self.gc3(gene, codons),
-            "GC3s": self.gc3s(gene, codons),
+            "GC%": self.gc_percent(gene),
+            "GC1": self.gc1(gene),
+            "GC2": self.gc2(gene),
+            "GC12": self.gc12(gene),
+            "GC3": self.gc3(gene),
+            "GC3s": self.gc3s(gene),
             **{f"{base}3s": base3s[base] for base in "AUGC"},
-            "AT3s": self.at3s(gene, codons),
+            "AT3s": self.at3s(gene),
         }
 
     def __repr__(self) -> str:
-        return f"Composition({self.__cub!r})"
+        return f"Composition({self.cub!r})"

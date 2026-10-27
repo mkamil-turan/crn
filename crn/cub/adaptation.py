@@ -37,7 +37,7 @@ Kullanım::
 
     from crn.cub import CUB, Adaptation
 
-    ada = Adaptation(cub, reference=CUB(genes=ribosomal_genes))
+    ada = Adaptation(cub, reference=CUB(ribosomal_genes))
     ada.relative_adaptiveness()             # {kodon: w}
     ada.cai(gene="MEFV_NM_000243.3")
     ada.cbi(gene="MEFV_NM_000243.3", method="chi2")
@@ -45,11 +45,10 @@ Kullanım::
 from __future__ import annotations
 
 import math
-from typing import (Dict, Optional, Sequence)
+from typing import Dict, Optional, Sequence
 
-from crn.io.crn_io_const import CODONS
-from crn.cub.crn_cub_counts import CUB
-from crn.cub.crn_cub_synonymous import (Synonymous, PREFERRED_RSCU, OPTIMAL_ALPHA)
+from crn.cub.core import CUB
+from crn.cub.synonymous import Synonymous, PREFERRED_RSCU, OPTIMAL_ALPHA
 
 
 # Referansta hiç geçmeyen kodonun w hesabında kabul edilen sayısı (Sharp ve Li, 1987).
@@ -59,16 +58,15 @@ ABSENT_COUNT = 0.5
 class Adaptation:
     """Bir ``CUB`` nesnesinin referans gen setine uyumu.
 
-    Metotlar ``CUB`` ile aynı biçimde ``gene`` verilmezse tüm genleri
-    birlikte, verilirse yalnızca o geni hesaplar.
+    Metotlar ``gene`` verilmezse tüm genleri birlikte, verilirse yalnızca o
+    geni hesaplar.
 
     Args:
         cub: Kodonları hazırlanmış ``CUB`` nesnesi.
-        reference: w'lerin ve optimal kodonların belirleneceği referans
-            (yüksek ifadeli) gen seti; verilmezse ``cub`` kullanılır (bu
-            durumda indeksler genin kendisine göre ölçülür).
-        background: Optimal kodonların ``method="chi2"`` ile seçiminde
-            referansla karşılaştırılan gen seti; verilmezse ``cub``.
+        reference: w'lerin ve optimal kodonların belirleneceği (yüksek ifadeli)
+            gen seti; verilmezse ``cub`` (indeksler genin kendisine göre olur).
+        background: ``method="chi2"`` ile optimal kodon seçiminde referansla
+            karşılaştırılan gen seti; verilmezse ``cub``.
 
     Raises:
         TypeError, ValueError: ``Synonymous`` ile aynı koşullarda.
@@ -76,62 +74,45 @@ class Adaptation:
 
     def __init__(self, cub: CUB, reference: Optional[CUB] = None,
                  background: Optional[CUB] = None):
-        self.__synonymous = Synonymous(cub, reference, background)
-
-    @property
-    def synonymous(self) -> Synonymous:
-        """Optimal kodon seçiminde kullanılan ``Synonymous`` nesnesi."""
-        return self.__synonymous
-
-    @property
-    def cub(self) -> CUB:
-        return self.__synonymous.cub
-
-    @property
-    def reference(self) -> CUB:
-        return self.__synonymous.reference
-
-    @property
-    def background(self) -> CUB:
-        return self.__synonymous.background
+        self.synonymous = Synonymous(cub, reference, background)
+        self.cub = cub
+        self.reference = self.synonymous.reference
+        self.background = self.synonymous.background
+        self._w: Dict[float, Dict[str, float]] = {}
 
     # --- D. Referans setine dayalı indeksler ------------------------------------
 
-    def relative_adaptiveness(self, absent_count: float = ABSENT_COUNT,
-                              codons: Sequence[str] = CODONS) -> Dict[str, float]:
-        """18. w: referans setteki (tüm genleri birlikte) kodon sayısı / ailesinin en büyük sayısı.
+    def relative_adaptiveness(self, absent_count: float = ABSENT_COUNT) -> Dict[str, float]:
+        """18. w: referanstaki (tüm genler) kodon sayısı / ailesinin en büyük sayısı.
 
-        Yalnızca eş anlamlı kodonlar için döner. Kodon sayısı ile kodon oranı
-        ya da RSCU aynı aile içinde orantılı olduğundan w üçünden de aynı
-        çıkar.
+        Yalnızca eş anlamlı kodonlar için döner; sonuç önbelleğe alınır.
 
         Args:
             absent_count: Referansta hiç geçmeyen kodonun sayısı yerine
-                kullanılacak değer (0'dan büyük olmalı).
+                kullanılacak değer (0'dan büyük).
 
         Raises:
             ValueError: absent_count 0 ya da negatifse.
         """
         if absent_count <= 0:
             raise ValueError(f"absent_count 0'dan büyük olmalı, {absent_count!r} verildi")
-        reference = self.reference
-        counts = reference.codon_counts(None, codons)
-        synonymous = set(reference.synonymous_codons(codons))
-
-        w = {}
-        for family in reference.codon_families().values():
-            family = [codon for codon in family if codon in synonymous]
-            if not family:
-                continue
-            values = {codon: (counts[codon] or absent_count) for codon in family}
-            largest = max(values.values())
-            w.update({codon: n / largest for codon, n in values.items()})
-        return {codon: w[codon] for codon in codons if codon in w}
+        if absent_count not in self._w:
+            counts = self.reference.codon_counts()
+            synonymous = self.reference.genetic_code.synonymous_codons
+            w = {}
+            for family in self.reference.genetic_code.families.values():
+                family = [codon for codon in family if codon in synonymous]
+                if not family:
+                    continue
+                values = {codon: (counts[codon] or absent_count) for codon in family}
+                largest = max(values.values())
+                w.update({codon: n / largest for codon, n in values.items()})
+            self._w[absent_count] = {codon: w[codon] for codon in counts if codon in w}
+        return dict(self._w[absent_count])
 
     def cai(self, gene: Optional[str] = None,
             w: Optional[Dict[str, float]] = None,
-            absent_count: float = ABSENT_COUNT,
-            codons: Sequence[str] = CODONS) -> float:
+            absent_count: float = ABSENT_COUNT) -> float:
         """19. CAI: genin eş anlamlı kodonlarının w değerlerinin geometrik ortalaması.
 
         Args:
@@ -144,8 +125,8 @@ class Adaptation:
             ValueError: w içinde 0 ya da negatif bir değer varsa.
         """
         if w is None:
-            w = self.relative_adaptiveness(absent_count, codons)
-        counts = self.cub.codon_counts(gene, [codon for codon in codons if codon in w])
+            w = self.relative_adaptiveness(absent_count)
+        counts = self.cub.codon_counts(gene, list(w))
         total = sum(counts.values())
         if not total:
             return 0.0
@@ -161,35 +142,25 @@ class Adaptation:
             optimal_codons: Optional[Sequence[str]] = None,
             method: str = "rscu",
             threshold: float = PREFERRED_RSCU,
-            alpha: float = OPTIMAL_ALPHA,
-            codons: Sequence[str] = CODONS) -> float:
-        """20. CBI: (N_opt − N_rastgele) / (N_toplam − N_rastgele).
+            alpha: float = OPTIMAL_ALPHA) -> float:
+        """20. CBI: (N_opt − N_rastgele) / (N_toplam − N_rastgele); payda 0 ise 0.
 
         Args:
             optimal_codons: Optimal kodonlar; verilmezse
                 ``Synonymous.optimal_codons(method, threshold, alpha)``.
-            method, threshold, alpha: Optimal kodon seçimi (bkz.
-                ``Synonymous.optimal_codons``).
-
-        Returns:
-            1 yalnızca optimal kodon, 0 rastgele kullanım; payda 0 ise 0.
 
         Raises:
             ValueError: method geçersizse.
         """
         if optimal_codons is None:
-            optimal_codons = self.__synonymous.optimal_codons(method, threshold, alpha, codons)
-        optimal_codons = set(optimal_codons)
+            optimal_codons = self.synonymous.optimal_codons(method, threshold, alpha)
+        optimal_codons = set(optimal_codons) & self.cub.genetic_code.synonymous_codons
 
-        cub = self.cub
-        table = cub.genetic_code.table
-        counts = cub.codon_counts(gene, codons)
-        aa_counts = cub.amino_acid_counts(gene, codons=codons)
-        synonymous = set(cub.synonymous_codons(codons))
-
+        counts = self.cub.codon_counts(gene)
+        aa_counts = self.cub.amino_acid_counts(gene)
         n_total = n_optimal = n_random = 0.0
-        for aa, family in cub.codon_families().items():
-            optimal = [codon for codon in family if codon in optimal_codons and codon in synonymous]
+        for aa, family in self.cub.codon_families().items():
+            optimal = [codon for codon in family if codon in optimal_codons]
             if not optimal:
                 continue
             n_total += aa_counts[aa]
@@ -199,4 +170,4 @@ class Adaptation:
         return (n_optimal - n_random) / denominator if denominator else 0.0
 
     def __repr__(self) -> str:
-        return f"Adaptation({self.__synonymous!r})"
+        return f"Adaptation({self.synonymous!r})"

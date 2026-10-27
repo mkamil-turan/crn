@@ -29,3 +29,6 @@ proteinler = [p for p in g1.proteins.values()
 print(proteinler[0])
 
 print(mRNA.translation())
+
+# Ya da doğrudan: transkript ile proteini eşleyen CDS
+print(rna.match_orf(proteinler[0]))

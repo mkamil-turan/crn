@@ -36,10 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import (Any, Dict, Iterator, List, Optional, Tuple)
 
-from tqdm import tqdm
-
-from crn.io import (DNA, RNA, PRT, Gene, GenomicStrand, Maps)
-from crn.fetch.crn_fetch_session import NcbiSession
+from crn.constants import DNA_TO_RNA
+from crn.seq import DNA, RNA, PRT, GenomicStrand
+from crn.gene import Gene
+from crn.fetch._store import LocalSource, atomic_write, split_fasta, read_single_fasta
+from crn.fetch.session import NcbiSession
 
 
 NCBI_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -54,28 +55,10 @@ ORGANISMS = {
     "worm":      ("6239",),
 }
 
-# Proje kökündeki sys/ klasörü.
-DEFAULT_SYS_DIR = Path(__file__).resolve().parents[2] / "sys"
-
 # Tek istekte indirilecek en çok kayıt.
 _BATCH = 100
 _CDS = re.compile(r"^[<>]?(\d+)\t[<>]?(\d+)\tCDS\s*$")
 _QUALIFIER = re.compile(r"^\t\t\t(\S+)\t(.*)$")
-
-
-def _write(path: Path, text: str) -> None:
-    """Dosyayı önce .tmp olarak yazıp sonra yerine koyar; yarım dosya kalmaz."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
-
-
-def _split_fasta(text: str) -> Iterator[Tuple[str, str]]:
-    """Çok kayıtlı FASTA metnini (erişim, kaydın metni) çiftlerine böler."""
-    for block in re.split(r"(?m)^(?=>)", text):
-        if block.startswith(">"):
-            yield block[1:].split(None, 1)[0], block.rstrip("\n") + "\n"
 
 
 def _split_feature_table(text: str) -> Iterator[Tuple[str, str]]:
@@ -84,12 +67,6 @@ def _split_feature_table(text: str) -> Iterator[Tuple[str, str]]:
         match = re.match(r">Feature \w+\|([^|]+)\|", block)
         if match:
             yield match.group(1), block.rstrip("\n") + "\n"
-
-
-def _read_fasta(path: Path) -> Tuple[str, str]:
-    """Tek kayıtlı FASTA dosyasından (başlık, dizi) döndürür."""
-    lines = path.read_text().splitlines()
-    return lines[0][1:].strip(), "".join(line.strip() for line in lines[1:])
 
 
 def _parse_feature_table(text: str) -> Dict[str, Any]:
@@ -125,7 +102,7 @@ def _parse_feature_table(text: str) -> Dict[str, Any]:
     return result
 
 
-class Ncbi:
+class Ncbi(LocalSource):
     """NCBI'dan DNA, RNA, PRT ve Gene nesneleri çıkarır.
 
     Args:
@@ -138,15 +115,16 @@ class Ncbi:
             (tqdm) gösterilir.
     """
 
+    SOURCE = "NCBI"
+
     def __init__(self, organism: str = "human", session: Optional[NcbiSession] = None,
                  sys_dir: Optional[str | Path] = None, verbose: bool = True):
         if organism not in ORGANISMS:
             raise ValueError(f"Desteklenmeyen organizma: {organism}; "
                              f"seçenekler: {', '.join(ORGANISMS)}")
+        super().__init__(sys_dir, verbose)
         self.organism = organism
         self.session = session if session is not None else NcbiSession()
-        self.sys_dir = Path(sys_dir) if sys_dir is not None else DEFAULT_SYS_DIR
-        self.verbose = verbose
 
     # --- Klasörler ------------------------------------------------------------
 
@@ -170,14 +148,6 @@ class Ncbi:
         folder = self.ncbi_dir / db
         versions = [p.stem for p in folder.glob(f"{accession}.*.fa")] if folder.is_dir() else []
         return max(versions, key=lambda a: int(a.rsplit(".", 1)[1])) if versions else None
-
-    def _log(self, message: str) -> None:
-        if self.verbose:
-            tqdm.write(message)
-
-    def _bar(self, total: int, desc: str, unit: str) -> tqdm:
-        return tqdm(total=total, desc=desc, unit=unit, dynamic_ncols=True,
-                    disable=not self.verbose)
 
     # --- NCBI istekleri -------------------------------------------------------
 
@@ -221,7 +191,7 @@ class Ncbi:
         if not ids:
             raise KeyError(f"NCBI: '{gene}' geni {self.organism} organizmasında bulunamadı")
         symbols[gene] = ids[0]
-        _write(symbols_file, json.dumps(symbols, indent=1, sort_keys=True))
+        atomic_write(symbols_file, json.dumps(symbols, indent=1, sort_keys=True))
         return ids[0]
 
     def _summary(self, gene_id: str) -> Dict[str, Any]:
@@ -304,7 +274,7 @@ class Ncbi:
             "proteins": proteins,
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        _write(self._gene_file(gene_id), json.dumps(record, indent=1))
+        atomic_write(self._gene_file(gene_id), json.dumps(record, indent=1))
         return gene_id
 
     def _download_rnas(self, ids: List[str], force: bool) -> List[str]:
@@ -315,16 +285,16 @@ class Ncbi:
         yalnızca eksik olanlar için indirilir.
         """
         accessions = []
-        for accession, text in _split_fasta(self._efetch("nuccore", ids, "fasta", "RNA dizileri")):
+        for accession, text in split_fasta(self._efetch("nuccore", ids, "fasta", "RNA dizileri")):
             if force or not self._record_file("nuccore", accession, "fa").is_file():
-                _write(self._record_file("nuccore", accession, "fa"), text)
+                atomic_write(self._record_file("nuccore", accession, "fa"), text)
             accessions.append(accession)
         missing = [a for a in accessions
                    if force or not self._record_file("nuccore", a, "ft").is_file()]
         if missing:
             for accession, text in _split_feature_table(
                     self._efetch("nuccore", missing, "ft", "RNA özellik tabloları")):
-                _write(self._record_file("nuccore", accession, "ft"), text)
+                atomic_write(self._record_file("nuccore", accession, "ft"), text)
         # Önce doğrulanmış (NM_, NR_), sonra tahmini (XM_, XR_) kayıtlar
         return sorted(accessions, key=lambda a: (a.startswith("X"), a))
 
@@ -332,9 +302,9 @@ class Ncbi:
         missing = [a for a in accessions
                    if force or not self._record_file("protein", a, "fa").is_file()]
         if missing:
-            for accession, text in _split_fasta(
+            for accession, text in split_fasta(
                     self._efetch("protein", missing, "fasta", "Protein dizileri")):
-                _write(self._record_file("protein", accession, "fa"), text)
+                atomic_write(self._record_file("protein", accession, "fa"), text)
 
     def _region_file(self, accession: str, start: int, end: int, strand: str) -> Path:
         sign = "plus" if strand == "+" else "minus"
@@ -347,10 +317,10 @@ class Ncbi:
             text = self._efetch("nuccore", [accession], "fasta", "Genomik bölge",
                                 seq_start=start, seq_stop=end,
                                 strand=1 if strand == "+" else 2)
-            records = list(_split_fasta(text))
+            records = list(split_fasta(text))
             if not records:
                 raise KeyError(f"NCBI: {accession}:{start}-{end} bölgesi indirilemedi")
-            _write(path, records[0][1])
+            atomic_write(path, records[0][1])
         return path
 
     @staticmethod
@@ -385,10 +355,7 @@ class Ncbi:
         return json.loads(path.read_text())
 
     def _features(self, obj, **values) -> None:
-        obj.features.set("source", "NCBI")
-        for key, value in values.items():
-            if value not in (None, "", []):
-                obj.features.set(key, value)
+        super()._features(obj, empty=(None, "", []), **values)
 
     # --- Çıkarma -------------------------------------------------------------
 
@@ -410,7 +377,7 @@ class Ncbi:
             raise ValueError(f"strand '+' ya da '-' olmalı, {strand!r} verildi")
         if not 1 <= start <= end:
             raise ValueError(f"Geçersiz bölge: {start}-{end}")
-        _, seq = _read_fasta(self._download_region(accession, start, end, strand))
+        _, seq = read_single_fasta(self._download_region(accession, start, end, strand))
         dna = DNA(seq, name=name or f"{accession}:{start}-{end}({strand})")
         self._features(dna, chromosome=accession, start=start, end=end, chromosome_strand=strand)
         return dna
@@ -458,10 +425,10 @@ class Ncbi:
                 raise KeyError(f"NCBI: '{accession}' transkripti bulunamadı")
             found = downloaded[0]
 
-        title, seq = _read_fasta(self._record_file("nuccore", found, "fa"))
+        title, seq = read_single_fasta(self._record_file("nuccore", found, "fa"))
         ft = self._record_file("nuccore", found, "ft")
         table = _parse_feature_table(ft.read_text()) if ft.is_file() else {}
-        rna = RNA(seq.translate(Maps.CODING_TO_RNA_MAP.value), name=found,
+        rna = RNA(seq.translate(DNA_TO_RNA), name=found,
                   genomic_strand=genomic_strand)
         self._features(rna, transcript_id=found, title=title.split(None, 1)[-1],
                        predicted=found.startswith("X"), gene_id=table.get("gene_id"),
@@ -501,7 +468,7 @@ class Ncbi:
             if found is None:
                 raise KeyError(f"NCBI: '{accession}' proteini bulunamadı")
 
-        title, seq = _read_fasta(self._record_file("protein", found, "fa"))
+        title, seq = read_single_fasta(self._record_file("protein", found, "fa"))
         prt = PRT(seq, name=found)
         self._features(prt, protein_id=found, transcript_id=transcript_id,
                        title=title.split(None, 1)[-1])
@@ -534,8 +501,7 @@ class Ncbi:
                           else GenomicStrand.Plus if region else GenomicStrand.Unknown)
 
         protein_of = {transcript: protein for protein, transcript in record["proteins"].items()}
-        for accession in tqdm(record["transcripts"], desc=f"{name} transkriptleri",
-                              unit="transkript", dynamic_ncols=True, disable=not self.verbose):
+        for accession in self._progress(record["transcripts"], f"{name} transkriptleri", "transkript"):
             result.add_transcript(self.rna(accession, genomic_strand), accession)
             if accession in protein_of:
                 prt = self.protein(protein_of[accession])

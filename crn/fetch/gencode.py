@@ -19,7 +19,7 @@ klasöre bakılır; veri yoksa ``Gencode.update()`` ile indirilir ve hazırlanı
 
 Kullanım::
 
-    from crn.fetch.crn_fetch_gencode import Gencode
+    from crn.fetch import Gencode
 
     gc = Gencode()                  # insan, sys/ içindeki en yeni sürüm
     gc.update()                     # isteğe bağlı: indir/hazırla (yoksa ilk istekte yapılır)
@@ -40,9 +40,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import (Dict, Iterator, List, Optional, Tuple)
 
-from tqdm import tqdm
-
-from crn.io import (DNA, RNA, PRT, Gene, GenomicStrand, Maps)
+from crn.constants import DNA_COMPLEMENT, DNA_TO_RNA
+from crn.seq import DNA, RNA, PRT, GenomicStrand
+from crn.gene import Gene
+from crn.fetch._store import LocalSource
 
 
 GENCODE_URL = "https://ftp.ebi.ac.uk/pub/databases/gencode"
@@ -52,9 +53,6 @@ SPECIES = {
     "human": ("Gencode_human", "v"),
     "mouse": ("Gencode_mouse", "vM"),
 }
-
-# Proje kökündeki sys/ klasörü.
-DEFAULT_SYS_DIR = Path(__file__).resolve().parents[2] / "sys"
 
 _ATTRIBUTE = re.compile(r'(\S+) "([^"]*)"')
 _VERSION = re.compile(r"\.\d+")
@@ -74,10 +72,10 @@ def _unversioned(identifier: str) -> str:
 
 
 def _reverse_complement(seq: str) -> str:
-    return seq.translate(Maps.DEFAULT_COMPLEMENT_MAP_FOR_DNA.value)[::-1]
+    return seq.translate(DNA_COMPLEMENT)[::-1]
 
 
-class Gencode:
+class Gencode(LocalSource):
     """GENCODE sürümünden DNA, RNA, PRT ve Gene nesneleri çıkarır.
 
     Args:
@@ -91,15 +89,16 @@ class Gencode:
             çubuklarıyla (tqdm) gösterilir.
     """
 
+    SOURCE = "GENCODE"
+
     def __init__(self, species: str = "human", release: Optional[str] = None,
                  sys_dir: Optional[str | Path] = None,
                  base_url: str = GENCODE_URL, verbose: bool = True):
         if species not in SPECIES:
             raise ValueError(f"Desteklenmeyen tür: {species}; seçenekler: {', '.join(SPECIES)}")
+        super().__init__(sys_dir, verbose)
         self.species = species
-        self.sys_dir = Path(sys_dir) if sys_dir is not None else DEFAULT_SYS_DIR
         self.base_url = base_url.rstrip("/")
-        self.verbose = verbose
         self.__requested = self._normalize_release(release) if release else None
         self.__release = self.__requested
         self.__tables: Optional[dict] = None
@@ -291,17 +290,6 @@ class Gencode:
                 digest.update(chunk)
                 bar.update(len(chunk))
         return digest.hexdigest()
-
-    def _log(self, message: str) -> None:
-        if self.verbose:
-            tqdm.write(message)
-
-    def _bar(self, total: Optional[int], desc: str, unit: str = "B") -> tqdm:
-        """İlerleme çubuğu; verbose False ise gösterilmez."""
-        in_bytes = unit == "B"
-        return tqdm(total=total or None, desc=desc, unit=unit, unit_scale=in_bytes,
-                    unit_divisor=1024 if in_bytes else 1000, dynamic_ncols=True,
-                    disable=not self.verbose)
 
     def _gzip_lines(self, source: Path, desc: str) -> Iterator[bytes]:
         """gzip dosyasının satırlarını verir; çubuk okunan sıkıştırılmış baytlara göre ilerler."""
@@ -529,11 +517,7 @@ class Gencode:
             return f.read(size).decode().replace("\n", "").replace("\r", "")
 
     def _features(self, obj, **values) -> None:
-        obj.features.set("source", "GENCODE")
-        obj.features.set("release", self.release)
-        for key, value in values.items():
-            if value not in (None, ""):
-                obj.features.set(key, value)
+        super()._features(obj, release=self.release, **values)
 
     # --- Çıkarma -------------------------------------------------------------
 
@@ -610,7 +594,7 @@ class Gencode:
         if entry is None:
             raise KeyError(f"GENCODE {self.release}: {t['transcript_id']} için dizi yok "
                            f"(yalnızca referans kromozomlardaki transkriptlerin dizisi vardır)")
-        seq = self._read_record("transcripts.fa", entry).translate(Maps.CODING_TO_RNA_MAP.value)
+        seq = self._read_record("transcripts.fa", entry).translate(DNA_TO_RNA)
         genomic_strand = GenomicStrand.Plus if t["strand"] == "+" else GenomicStrand.Minus
         rna = RNA(seq, name=t["transcript_id"], genomic_strand=genomic_strand)
         gene_name = self._load()["genes"].get(t["gene_id"], {}).get("gene_name")
@@ -668,8 +652,7 @@ class Gencode:
                        start=int(g["start"]), end=int(g["end"]), chromosome_strand=g["strand"])
 
         transcripts = tables["gene_transcripts"].get(g["gene_id"], [])
-        for t in tqdm(transcripts, desc=f"{result.name} transkriptleri", unit="transkript",
-                      dynamic_ncols=True, disable=not self.verbose):
+        for t in self._progress(transcripts, f"{result.name} transkriptleri", "transkript"):
             transcript_id = t["transcript_id"]
             if transcript_id not in tables["transcript_seqs"]:
                 continue

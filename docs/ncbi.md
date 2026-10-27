@@ -1,12 +1,12 @@
-# crn_fetch_ncbi
+# Ncbi
 
-`crn/fetch/crn_fetch_ncbi.py` modülü, NCBI'dan (RefSeq) genomik DNA, transkript
+`crn/fetch/ncbi.py` modülü, NCBI'dan (RefSeq) genomik DNA, transkript
 (RNA), protein ve bunların hepsini bir arada tutan `Gene` nesnelerini çıkaran
-**`Ncbi`** sınıfını tanımlar. İstekler `crn/fetch/crn_fetch_session.py`
+**`Ncbi`** sınıfını tanımlar. İstekler `crn/fetch/session.py`
 içindeki **`NcbiSession`** üzerinden yapılır.
 
 Örnek betik: [test/ncbi_test.py](../test/ncbi_test.py)
-Genel kılavuz: [crn_kullanim_kilavuzu.md](crn_kullanim_kilavuzu.md) (bölüm 11 ve 13)
+Genel kılavuz: [kilavuz.md](kilavuz.md) (bölüm 11 ve 13)
 
 Bu belgedeki tüm çıktılar MEFV geni (NCBI Gene ID `4210`) üzerinde
 çalıştırılarak alınmıştır.
@@ -357,7 +357,7 @@ Tek başına çağrıldığında RNA'nın hangi zincirden geldiği bilinmez ve `
 görünür. Bunu biliyorsanız kendiniz verin, ya da RNA'yı `gene()` üzerinden alın:
 
 ```python
->>> from crn.io import GenomicStrand
+>>> from crn import GenomicStrand
 >>> ncbi.rna("NM_000243.3", GenomicStrand.Minus)
 NM_000243.3: CUACC...AUCUG <3506> [RNA] 5'->3' (-)
 ```
@@ -452,7 +452,7 @@ else:
 
 ## 13. Gene ile çalışmak
 
-`ncbi.gene()` sonucu sıradan bir `crn.io.Gene` nesnesidir.
+`ncbi.gene()` sonucu sıradan bir `crn.Gene` nesnesidir.
 
 ```python
 mefv = ncbi.gene("MEFV")
@@ -514,7 +514,7 @@ ekleyebilirsiniz. Aynı kimlik ikinci kez eklenirse `ValueError` verir.
 ### Tüm geni tek dosyada (CRN)
 
 ```python
-from crn.io import Gene
+from crn import Gene
 
 mefv.to_crn("MEFV.crn")
 mefv2 = Gene.from_crn("MEFV.crn")    # ağ ya da sys/ gerekmez
@@ -527,7 +527,7 @@ birlikte yazılır. Biçim pickle değildir; kendi ikili biçimidir.
 ### Tek bir diziyi FASTA'ya
 
 ```python
-from crn.io import PRT
+from crn import PRT
 
 mefv.protein("NP_000234.1").to_fasta("NP_000234.1.fa")
 mefv.dna.to_fasta("MEFV_genomic.fa")
