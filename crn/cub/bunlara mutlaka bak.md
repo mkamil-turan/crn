@@ -1,0 +1,8 @@
+Doğrulayamadığım yerler
+Wilkinson–Harrison sabitleri (madde 30): Sabitleri, Davis ve ark. 1999'daki yeniden kalibre edilmiş modelden ezberimden yazdım: λ1 = 15.43, λ2 = −29.56, CV′ = 1.71, ve olasılık formülü. Siz de sabitlerin orijinal makaleden doğrulanmasını istemiştiniz; bu oturumda makaleye ulaşamadım. Ayrıca ubikitin E. coli’de çok iyi çözünmesine rağmen model onu “çözünmez” çıkardı (CV = 1.96). Bu sonuç, ya modelin kaba olmasından (yaklaşık %70 doğruluk bildiriliyor) ya da sabitlerden birinin yanlış olmasından kaynaklanıyor olabilir. Makaleden kontrol edilmeli. Sabitler modülde WH_* adıyla duruyor, düzeltmek kolay.
+Protein-Sol ağırlıkları (madde 34): Bu ağırlıkları güvenilir şekilde bilmediğim için koda koymadım. Uydurmak yerine şunu yaptım: Protein-Sol tipi modellerin kullandığı özellikleri features() ile hesaplanır hale getirdim, ağırlıkları da linear_score metoduna parametre olarak bıraktım. Katsayılar Hebditch ve ark. 2017'nin ek dosyalarından alınıp verilmeli.
+Dışarıdan kontrol edemediğim ölçekler: Kyte–Doolittle’ı GRAVY ile, ε katsayılarını ExPASy ile doğruladım. Diğerlerini (Hopp–Woods, Eisenberg, Wimley–White, Janin, Boman, Cohn–Edsall, Zamyatnin, Tien ASA, TOP-IDP) bilinen bir sonuçla karşılaştıramadım. Değerler yaygın kullanılan tablolardan; yine de yayınlamadan önce birkaç tanesini kaynakla karşılaştırmanızı öneririm.
+Tanımla ilgili seçimlerim:
+Wimley–White ölçeğinde His’i nötr aldım (0.17); protonlanmış His için değer 0.96.
+Boman tablosunda Pro için değer yok; 0 aldım.
+Hidrofobik ve polar grupları EMBOSS’tan aldım.
