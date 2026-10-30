@@ -57,9 +57,13 @@ Kullanım::
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from crn.cub.core import CUB
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 
 # Tercih edilen ve az kullanılan kodon için yaygın RSCU eşikleri.
@@ -237,6 +241,98 @@ class Synonymous:
         total = sum(counts.values())
         optimal = sum(n for codon, n in counts.items() if codon in optimal_codons)
         return optimal / total if total else 0.0
+
+    # --- Çizimler --------------------------------------------------------------------
+
+    def _synonymous_layout(self) -> Tuple[List[str], List[str]]:
+        """Eş anlamlı kodonlar (amino asit sırasıyla gruplu) ve her kodonun amino asidi.
+
+        Tek kodonlu amino asitler (Met, Trp, stop) RSCU'su hep 1 olduğundan dışta.
+        """
+        table = self.cub.genetic_code.table
+        families = self.cub.genetic_code.families
+        codons: List[str] = []
+        amino_acids: List[str] = []
+        for aa in sorted(families):
+            family = families[aa]
+            if len(family) < 2:
+                continue
+            for codon in family:
+                codons.append(codon)
+                amino_acids.append(table[codon])
+        return codons, amino_acids
+
+    def plot_rscu(self, gene: Optional[str] = None, ax: Optional[Axes] = None,
+                  file_name: Optional[str | Path] = None) -> Axes:
+        """15. RSCU çubuk grafiği: eş anlamlı kodonlar amino aside göre gruplanır.
+
+        Çubuklar ardışık amino asit grupları için iki renkte boyanır; 1
+        çizgisi tarafsız kullanımı (yanlılık yok), 1 üstü tercihi gösterir.
+        ``gene`` verilmezse tüm genler birlikte (havuz) çizilir.
+        """
+        from crn.cub._plotting import PLOT_GUIDE_STYLE, PLOT_LABEL_SIZE, axes, save
+        ax = axes(ax, figsize=(10, 4))
+        codons, amino_acids = self._synonymous_layout()
+        rscu = self.rscu(gene)
+        values = [rscu[codon] for codon in codons]
+
+        group_colors = ("#2a6fb0", "#8cb8dc")
+        group_index: Dict[str, int] = {}
+        colors = []
+        for aa in amino_acids:
+            group_index.setdefault(aa, len(group_index))
+            colors.append(group_colors[group_index[aa] % 2])
+
+        positions = range(len(codons))
+        ax.bar(positions, values, color=colors, width=0.8, zorder=3)
+        ax.axhline(1.0, **PLOT_GUIDE_STYLE)
+        ax.set_xticks(list(positions))
+        ax.set_xticklabels(codons, rotation=90, fontsize=PLOT_LABEL_SIZE,
+                           family="monospace")
+        # Her amino asit grubunun ortasına amino asit harfini yaz.
+        seen = 0
+        for aa in dict.fromkeys(amino_acids):
+            idx = [i for i, a in enumerate(amino_acids) if a == aa]
+            ax.text(sum(idx) / len(idx), ax.get_ylim()[1], aa, ha="center",
+                    va="bottom", fontsize=8, fontweight="bold")
+            seen += 1
+        ax.set(xlim=(-0.6, len(codons) - 0.4), ylabel="RSCU",
+               title=f"RSCU — {gene or 'tüm genler'}")
+        ax.margins(y=0.08)
+        return save(ax, file_name)
+
+    def plot_rscu_heatmap(self, ax: Optional[Axes] = None, genes: Optional[Sequence[str]] = None,
+                          cmap: str = "YlGnBu", file_name: Optional[str | Path] = None) -> Axes:
+        """15. RSCU ısı haritası: satırlar genler, sütunlar eş anlamlı kodonlar.
+
+        Türler/genler arası tercih örüntüsünü ve kümelenmeyi gösterir
+        (literatürde sık sık kümelenmiş ısı haritası olarak). ``genes``
+        verilmezse ``cub``'daki tüm genler; 40'tan çok gende satır adları
+        gizlenir.
+        """
+        from crn.cub._plotting import PLOT_LABEL_SIZE, axes, save
+        names = list(genes) if genes is not None else list(self.cub.names)
+        codons, amino_acids = self._synonymous_layout()
+        matrix = [[self.rscu(name)[codon] for codon in codons] for name in names]
+
+        ax = axes(ax, figsize=(max(8, len(codons) * 0.18), max(3, len(names) * 0.22)))
+        image = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=0.0,
+                          interpolation="nearest")
+        ax.set_xticks(range(len(codons)))
+        ax.set_xticklabels(codons, rotation=90, fontsize=PLOT_LABEL_SIZE, family="monospace")
+        if len(names) <= 40:
+            ax.set_yticks(range(len(names)))
+            ax.set_yticklabels(names, fontsize=PLOT_LABEL_SIZE)
+        else:
+            ax.set_yticks([])
+            ax.set_ylabel(f"{len(names)} gen")
+        # Amino asit grupları arasına ince ayraç çizgileri.
+        for i in range(1, len(codons)):
+            if amino_acids[i] != amino_acids[i - 1]:
+                ax.axvline(i - 0.5, color="white", linewidth=0.6)
+        ax.figure.colorbar(image, ax=ax, label="RSCU", fraction=0.025, pad=0.02)
+        ax.set_title("RSCU ısı haritası")
+        return save(ax, file_name)
 
     def __repr__(self) -> str:
         def label(other: CUB) -> str:

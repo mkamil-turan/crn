@@ -45,10 +45,14 @@ Kullanım::
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from crn.cub.core import CUB
 from crn.cub.synonymous import Synonymous, PREFERRED_RSCU, OPTIMAL_ALPHA
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 
 # Referansta hiç geçmeyen kodonun w hesabında kabul edilen sayısı (Sharp ve Li, 1987).
@@ -168,6 +172,32 @@ class Adaptation:
             n_random += aa_counts[aa] * len(optimal) / len(family)
         denominator = n_total - n_random
         return (n_optimal - n_random) / denominator if denominator else 0.0
+
+    # --- Çizim -----------------------------------------------------------------
+
+    def cai_points(self) -> List[Dict[str, float | str]]:
+        """19. Her gen için CAI: ``[{"gene", "cai"}, ...]``."""
+        w = self.relative_adaptiveness()
+        return [{"gene": name, "cai": self.cai(name, w=w)} for name in self.cub.names]
+
+    def plot_cai(self, ax: Optional[Axes] = None, bins: int = 20,
+                 file_name: Optional[str | Path] = None) -> Axes:
+        """19. CAI frekans dağılımı (histogram); referansa uyumun gen havuzundaki yayılımı.
+
+        Yüksek CAI referans (yüksek ifadeli) genlere benzer kodon kullanımını
+        gösterir. Kesikli çizgi ortalamadır.
+        """
+        from crn.cub._plotting import PLOT_GUIDE_STYLE, PLOT_POINT_STYLE, axes, save
+        ax = axes(ax)
+        values = [p["cai"] for p in self.cai_points()]
+        if values:
+            ax.hist(values, bins=bins, range=(0, 1),
+                    color=PLOT_POINT_STYLE["color"], edgecolor="white")
+            mean = sum(values) / len(values)
+            ax.axvline(mean, label=f"ortalama = {mean:.3f}", **PLOT_GUIDE_STYLE)
+            ax.legend(loc="upper right", frameon=False, fontsize=8)
+        ax.set(xlim=(0, 1), xlabel="CAI", ylabel="Gen sayısı", title="CAI dağılımı")
+        return save(ax, file_name)
 
     def __repr__(self) -> str:
         return f"Adaptation({self.synonymous!r})"
