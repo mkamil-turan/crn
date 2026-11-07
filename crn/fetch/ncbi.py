@@ -169,9 +169,11 @@ class Ncbi(LocalSource):
     def search_gene(self, gene: str) -> str:
         """Gen sembolünü (ör. ``"MEFV"``) NCBI Gene ID'sine çevirir.
 
-        Rakamlardan oluşan değer zaten Gene ID kabul edilir. Bulunan
-        eşleşmeler sys/ içinde saklanır; aynı sembol tekrar sorulduğunda ağa
-        çıkılmaz.
+        Rakamlardan oluşan değer zaten Gene ID kabul edilir. NCBI araması takma
+        adları da eşleştirdiği için birden çok sonuç varsa resmi sembolü tam
+        tutan gen seçilir (``MIP`` için TNPO1 değil MIP); yoksa ilk sonuç alınır.
+        Bulunan eşleşmeler sys/ içinde saklanır; aynı sembol tekrar sorulduğunda
+        ağa çıkılmaz.
 
         Raises:
             KeyError: Sembol bu organizmada bulunamazsa.
@@ -190,9 +192,15 @@ class Ncbi(LocalSource):
         ids = data.get("esearchresult", {}).get("idlist", [])
         if not ids:
             raise KeyError(f"NCBI: '{gene}' geni {self.organism} organizmasında bulunamadı")
-        symbols[gene] = ids[0]
+        found = ids[0]
+        if len(ids) > 1:
+            summaries = self._get("esummary.fcgi", db="gene", id=",".join(ids),
+                                  retmode="json").json().get("result", {})
+            found = next((i for i in ids if summaries.get(i, {}).get("name", "").casefold()
+                          == gene.casefold()), found)
+        symbols[gene] = found
         atomic_write(symbols_file, json.dumps(symbols, indent=1, sort_keys=True))
-        return ids[0]
+        return found
 
     def _summary(self, gene_id: str) -> Dict[str, Any]:
         data = self._get("esummary.fcgi", db="gene", id=gene_id, retmode="json").json()

@@ -16,6 +16,9 @@ klasöre bakılır; veri yoksa ``Gencode.update()`` ile indirilir ve hazırlanı
         regions.tsv                     protein kodlayan transkriptlerin
                                         UTR5/CDS/UTR3 koordinatları
         manifest.json                   hazırlık tamamlandığında yazılır
+        details.tsv                     transkriptlerin etiketleri, destek düzeyi
+                                        ve ekzonları (ilk gerektiğinde raw/ içindeki
+                                        GTF'den üretilir)
 
 Kullanım::
 
@@ -28,6 +31,12 @@ Kullanım::
     rna = gc.rna("ENST00000219596") # transkript (sürüm numarası olmadan da olur)
     prt = gc.protein("ENST00000219596")   # transkriptin proteini (ENSP de olur)
     bolge = gc.region("chr16", 3242028, 3256627, "-")
+
+    gc.gene_types()                 # {"lncRNA": 35020, "protein_coding": 20131, ...}
+    gc.genes(gene_type="miRNA", chromosome="chr21")      # satırlar (dict listesi)
+    gc.transcripts(gene="TP53", tag="MANE_Select")       # ana transkript
+    gc.details("ENST00000269305")   # etiketler, destek düzeyi, ekzonlar
+    gc.canonical("TP53")            # Gene: yalnızca ana transkript ve proteini
 """
 from __future__ import annotations
 
@@ -38,7 +47,8 @@ import re
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import (Dict, Iterator, List, Optional, Tuple)
+from collections import Counter
+from typing import (Any, Dict, Iterable, Iterator, List, Optional, Tuple)
 
 from crn.constants import DNA_COMPLEMENT, DNA_TO_RNA
 from crn.seq import DNA, RNA, PRT, GenomicStrand
@@ -60,10 +70,16 @@ _GENES_COLUMNS = ["gene_id", "gene_name", "gene_type", "chromosome", "start", "e
 _TRANSCRIPTS_COLUMNS = ["transcript_id", "gene_id", "transcript_name", "transcript_type",
                         "chromosome", "start", "end", "strand"]
 _REGION = re.compile(r"(UTR5|CDS|UTR3):(\d+)-(\d+)")
+_LEVEL = re.compile(r"\blevel (\d+)")
+_TAG = re.compile(r'\btag "([^"]*)"')
 # Hazırlık sonunda bulunması gereken dosyalar; biri eksikse sürüm hazır sayılmaz.
 _OUTPUTS = ["genome.fa", "genome.fai", "transcripts.fa", "transcripts.idx",
             "translations.fa", "translations.idx", "genes.tsv", "transcripts.tsv",
             "regions.tsv", "manifest.json"]
+
+
+class AmbiguousGeneError(ValueError):
+    """Aynı adı taşıyan birden çok gen var; gene_id gerekir."""
 
 
 def _unversioned(identifier: str) -> str:
@@ -102,6 +118,7 @@ class Gencode(LocalSource):
         self.__requested = self._normalize_release(release) if release else None
         self.__release = self.__requested
         self.__tables: Optional[dict] = None
+        self.__details: Optional[Dict[str, Dict[str, Any]]] = None
 
     # --- Sürüm ve klasörler -------------------------------------------------
 
@@ -181,6 +198,7 @@ class Gencode(LocalSource):
         """Verilen sürümü indirir ve eksik hazırlık dosyalarını üretir."""
         self.__release = release
         self.__tables = None
+        self.__details = None
         if self.is_ready() and not force:
             self._log(f"GENCODE {self.species} {self.release} zaten hazır: {self.release_dir}")
             return self.release
@@ -188,6 +206,7 @@ class Gencode(LocalSource):
         raw = self.release_dir / "raw"
         raw.mkdir(parents=True, exist_ok=True)
         (self.release_dir / "manifest.json").unlink(missing_ok=True)
+        (self.release_dir / "details.tsv").unlink(missing_ok=True)
 
         remote = self._remote_dir()
         checksums = self._read_checksums(remote)
@@ -459,6 +478,7 @@ class Gencode(LocalSource):
         tables = {
             "genes": {}, "gene_names": {}, "transcripts": {}, "transcript_names": {},
             "gene_transcripts": {}, "genome": genome,
+            "gene_rows": genes, "transcript_rows": transcripts,
             "transcript_seqs": read_idx("transcripts.idx"),
             "protein_seqs": read_idx("translations.idx"),
             "protein_of_transcript": {},
@@ -500,7 +520,7 @@ class Gencode(LocalSource):
             return matches[0]
         if matches:
             ids = ", ".join(g["gene_id"] for g in matches)
-            raise ValueError(f"'{gene}' adında birden çok gen var: {ids}; gene_id kullanın")
+            raise AmbiguousGeneError(f"'{gene}' adında birden çok gen var: {ids}; gene_id kullanın")
         raise KeyError(f"GENCODE {self.release}: '{gene}' geni bulunamadı")
 
     def _find_transcript(self, transcript: str) -> Dict[str, str]:
@@ -518,6 +538,156 @@ class Gencode(LocalSource):
 
     def _features(self, obj, **values) -> None:
         super()._features(obj, release=self.release, **values)
+
+    # --- Sorgular -------------------------------------------------------------
+
+    def gene_types(self) -> Dict[str, int]:
+        """{gene_type: gen sayısı}, çoktan aza."""
+        return dict(Counter(g["gene_type"] for g in self._load()["gene_rows"]).most_common())
+
+    def transcript_types(self) -> Dict[str, int]:
+        """{transcript_type: transkript sayısı}, çoktan aza."""
+        return dict(Counter(t["transcript_type"] for t in self._load()["transcript_rows"]).most_common())
+
+    @staticmethod
+    def _select(rows: List[Dict[str, str]], type_key: str, kinds: Optional[str | Iterable[str]],
+                chromosome: Optional[str], start: Optional[int],
+                end: Optional[int]) -> List[Dict[str, Any]]:
+        if (start is not None or end is not None) and chromosome is None:
+            raise ValueError("start/end için chromosome da verilmelidir")
+        wanted = {kinds} if isinstance(kinds, str) else None if kinds is None else set(kinds)
+        selected = []
+        for row in rows:
+            if wanted is not None and row[type_key] not in wanted:
+                continue
+            if chromosome is not None and row["chromosome"] != chromosome:
+                continue
+            first, last = int(row["start"]), int(row["end"])
+            if (start is not None and last < start) or (end is not None and first > end):
+                continue
+            selected.append({**row, "start": first, "end": last})
+        return selected
+
+    def genes(self, gene_type: Optional[str | Iterable[str]] = None,
+              chromosome: Optional[str] = None, start: Optional[int] = None,
+              end: Optional[int] = None, name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Koşullara uyan genlerin satırlarını GTF sırasıyla döndürür.
+
+        Satır: ``gene_id, gene_name, gene_type, chromosome, start, end, strand``;
+        ``start`` ve ``end`` sayıdır. Verilmeyen koşul uygulanmaz.
+
+        Args:
+            gene_type: Gen tipi ya da tipler (bkz. ``gene_types``).
+            chromosome: Kromozom adı (ör. ``"chr11"``).
+            start, end: Bu aralıkla örtüşen genler (1 tabanlı); chromosome gerekir.
+            name: Gen adında aranacak düzenli ifade (ör. ``r"^HOX[A-D]\\d+$"``).
+
+        Raises:
+            ValueError: start/end chromosome olmadan verilirse.
+        """
+        rows = self._select(self._load()["gene_rows"], "gene_type", gene_type, chromosome, start, end)
+        if name is not None:
+            pattern = re.compile(name)
+            rows = [g for g in rows if pattern.search(g["gene_name"])]
+        return rows
+
+    def transcripts(self, gene: Optional[str] = None,
+                    transcript_type: Optional[str | Iterable[str]] = None,
+                    chromosome: Optional[str] = None, start: Optional[int] = None,
+                    end: Optional[int] = None, tag: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Koşullara uyan transkriptlerin satırlarını GTF sırasıyla döndürür.
+
+        Satır: ``transcript_id, gene_id, transcript_name, transcript_type,
+        chromosome, start, end, strand``; ``start`` ve ``end`` sayıdır.
+
+        Args:
+            gene: Gen adı ya da gene_id; yalnızca bu genin transkriptleri.
+            transcript_type: Transkript tipi ya da tipler (bkz. ``transcript_types``).
+            chromosome, start, end: Bu bölgeyle örtüşenler (``genes`` gibi).
+            tag: GTF etiketi (ör. ``"MANE_Select"``, ``"basic"``). Verilirse
+                ``details.tsv`` gerekir; yoksa ilk kullanımda üretilir.
+
+        Raises:
+            KeyError: gene bulunamazsa.
+            ValueError: Gen adı belirsizse ya da start/end chromosome olmadan verilirse.
+        """
+        tables = self._load()
+        rows = (tables["gene_transcripts"].get(self._find_gene(gene)["gene_id"], [])
+                if gene is not None else tables["transcript_rows"])
+        rows = self._select(rows, "transcript_type", transcript_type, chromosome, start, end)
+        if tag is not None:
+            details = self._load_details()
+            rows = [t for t in rows if tag in details[t["transcript_id"]]["tags"]]
+        return rows
+
+    def details(self, transcript: str) -> Dict[str, Any]:
+        """Transkriptin GTF ayrıntıları.
+
+        Returns:
+            ``{"level": int, "support_level": str, "tags": [str], "exons": [(baş, bit)]}``.
+            ``level`` GENCODE kanıt düzeyidir (1 doğrulanmış, 2 elle, 3 otomatik).
+            ``support_level`` TSL değeridir (``"1"`` en güçlü, ``""`` yok). Ekzonlar
+            genomik, 1 tabanlı koordinatlardadır ve transkriptin 5'->3' sırasıyla
+            verilir: (-) zincirde koordinatlar azalır.
+
+        Raises:
+            KeyError: Transkript bulunamazsa.
+        """
+        t = self._find_transcript(transcript)
+        record = self._load_details()[t["transcript_id"]]
+        return {**record, "tags": list(record["tags"]), "exons": list(record["exons"])}
+
+    def _load_details(self) -> Dict[str, Dict[str, Any]]:
+        """details.tsv'yi bir kez belleğe alır; dosya yoksa önce üretir."""
+        if self.__details is None:
+            self._ensure()
+            path = self.release_dir / "details.tsv"
+            if not path.is_file():
+                self._build_details()
+            details = {}
+            for line in self._file_lines(path, "Yükleniyor details.tsv"):
+                transcript_id, level, support, tags, exons = line.rstrip("\n").split("\t")
+                details[transcript_id] = {
+                    "level": int(level), "support_level": support,
+                    "tags": tags.split(",") if tags else [],
+                    "exons": [tuple(map(int, e.split("-"))) for e in exons.split(",")],
+                }
+            self.__details = details
+        return self.__details
+
+    def _build_details(self) -> None:
+        """raw/ içindeki GTF'den details.tsv yazar: kimlik, level, TSL, etiketler, ekzonlar."""
+        manifest = json.loads((self.release_dir / "manifest.json").read_text())
+        source = self.release_dir / "raw" / manifest["files"]["annotation"]
+        if not source.is_file():
+            raise FileNotFoundError(f"{source} yok; details.tsv üretilemez. update(force=True) çalıştırın")
+        target = self.release_dir / "details.tsv"
+        current, row, exons = None, [], []
+
+        def flush(out) -> None:
+            if current is not None:
+                out.write("\t".join([current, *row, ",".join(exons)]) + "\n")
+
+        with open(self._tmp(target), "w") as out:
+            for raw_line in self._gzip_lines(source, "Transkript ayrıntıları çıkarılıyor"):
+                line = raw_line.decode()
+                if line.startswith("#"):
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 9:
+                    continue
+                if fields[2] == "transcript":
+                    flush(out)
+                    attributes = dict(_ATTRIBUTE.findall(fields[8]))
+                    level = _LEVEL.search(fields[8])
+                    current, exons = attributes.get("transcript_id", ""), []
+                    row = [level.group(1) if level else "0",
+                           attributes.get("transcript_support_level", ""),
+                           ",".join(_TAG.findall(fields[8]))]
+                elif fields[2] == "exon":
+                    exons.append(f"{fields[3]}-{fields[4]}")
+            flush(out)
+        self._commit(target)
 
     # --- Çıkarma -------------------------------------------------------------
 
@@ -645,13 +815,40 @@ class Gencode(LocalSource):
             gene: Gen adı (ör. ``"MEFV"``) ya da gene_id.
         """
         g = self._find_gene(gene)
+        return self._gene_object(g, self._load()["gene_transcripts"].get(g["gene_id"], []))
+
+    def canonical(self, gene: str) -> Gene:
+        """Geni yalnızca ana transkripti ve proteiniyle döndürür.
+
+        Ana transkript ``MANE_Select``, yoksa ``Ensembl_canonical`` etiketli
+        protein kodlayan transkripttir (SHANK3 gibi genlerde ve mitokondride
+        MANE kaydı yoktur). Hangisinin seçildiği ``canonical_tag`` özelliğindedir.
+
+        Raises:
+            KeyError: Gen bulunamazsa.
+            ValueError: Genin bu etiketlerde protein kodlayan transkripti yoksa.
+        """
+        g = self._find_gene(gene)
+        tables = self._load()
+        details = self._load_details()
+        rows = [t for t in tables["gene_transcripts"].get(g["gene_id"], [])
+                if t["transcript_id"] in tables["protein_of_transcript"]]
+        for tag in ("MANE_Select", "Ensembl_canonical"):
+            chosen = [t for t in rows if tag in details[t["transcript_id"]]["tags"]]
+            if chosen:
+                result = self._gene_object(g, chosen[:1])
+                result.features.set("canonical_tag", tag)
+                return result
+        raise ValueError(f"{g['gene_name'] or g['gene_id']}: ana protein kodlayan transkript yok")
+
+    def _gene_object(self, g: Dict[str, str], transcripts: List[Dict[str, Any]]) -> Gene:
+        """Gen satırından, verilen transkriptleri içeren Gene."""
         tables = self._load()
         result = Gene(g["gene_name"] or g["gene_id"], self.dna(g["gene_id"]))
         self._features(result, gene_id=g["gene_id"], gene_name=g["gene_name"],
                        gene_type=g["gene_type"], chromosome=g["chromosome"],
                        start=int(g["start"]), end=int(g["end"]), chromosome_strand=g["strand"])
 
-        transcripts = tables["gene_transcripts"].get(g["gene_id"], [])
         for t in self._progress(transcripts, f"{result.name} transkriptleri", "transkript"):
             transcript_id = t["transcript_id"]
             if transcript_id not in tables["transcript_seqs"]:

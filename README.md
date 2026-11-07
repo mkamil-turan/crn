@@ -17,15 +17,18 @@ nesneleriyle modelleyen bir biyoinformatik çerçevesidir. Üç iş yapar:
    `ProteinProperties` ise protein özelliklerini (E-A … E-G) hesaplar. Sayımlar
    gen başına bir kez yapıldığından genom ölçeğinde de hızlıdır.
 
-Ayrıntılı başvuru belgeleri:
+Ayrıntılı başvuru belgeleri [doc/](doc/README.md) klasöründedir; `crn/` altındaki her dosyanın orada aynı yolda bir karşılığı vardır:
 
 | Belge | İçerik |
 |---|---|
-| [docs/kullanim_kilavuzu.md](docs/kullanim_kilavuzu.md) | Kullanım kılavuzu: tüm modüller (io, fetch, cub, protein), her fonksiyon örnekleriyle, uçtan uca senaryolar |
-| [docs/kilavuz.md](docs/kilavuz.md) | Veri modeli ve veri kaynaklarının her metodu, çalıştırılmış örneklerle |
-| [docs/features.md](docs/features.md) | `Features` deposu |
-| [docs/ncbi.md](docs/ncbi.md) | `Ncbi` ve `NcbiSession` |
-| [docs/dogrulanacak_sabitler.md](docs/dogrulanacak_sabitler.md) | Kaynağıyla doğrulanması gereken sabitler |
+| [doc/README.md](doc/README.md) | Dizin, modül haritası, kurulum |
+| [doc/seq.md](doc/seq.md), [doc/gene.md](doc/gene.md) | Veri modeli: diziler ve genler |
+| [doc/fetch/README.md](doc/fetch/README.md) | `Ncbi`, `Gencode`, `Hgnc`, `Hpo`, `NcbiSession` |
+| [doc/cub/README.md](doc/cub/README.md) | Kodon kullanımı ölçümleri ve diferansiyel analiz |
+| [doc/protein.md](doc/protein.md) | `ProteinProperties` |
+| [doc/senaryolar.md](doc/senaryolar.md) | Uçtan uca senaryolar |
+| [doc/sinirliliklar.md](doc/sinirliliklar.md) | Sınırlılıklar ve sık hatalar |
+| [doc/tables.md](doc/tables.md#8-kaynağıyla-doğrulanması-gereken-değerler) | Kaynağıyla doğrulanması gereken sabitler |
 
 ---
 
@@ -55,8 +58,8 @@ crn/
 ├── gene.py        Gene: genomik DNA + transkriptler + proteinler; isoforms()
 ├── fileio.py      FASTA ve CRN (pickle'sız ikili) dosya biçimleri
 ├── protein.py     ProteinProperties (E-A … E-G)
-├── fetch/         Ncbi, Gencode, NcbiSession; yerel sys/ deposu
-└── cub/           CUB (A) ve bölümler B–H; summary_table
+├── fetch/         Ncbi, Gencode, NcbiSession, Hgnc, Hpo; yerel sys/ deposu
+└── cub/           CUB (A), bölümler B–H ve J; summary_table
 ```
 
 Bağımlılıklar tek yönlüdür: `fetch` ve `cub` veri modelini kullanır; veri
@@ -110,7 +113,8 @@ hangi kaynaktan gelirse gelsin bir `Gene` listesi vermek yeterlidir.
 ## 2. Kurulum
 
 Python ≥ 3.12; bağımlılıklar `tqdm`, `requests`, `matplotlib` (yalnızca
-grafik çizilirken yüklenir).
+grafik çizilirken yüklenir), `scipy` ve `numpy` (yalnızca diferansiyel kodon
+testinde yüklenir).
 
 ```bash
 python -m venv .venv
@@ -126,11 +130,11 @@ Betikleri proje kökünden, sanal ortamın Python'u ile çalıştırın:
 
 Veriler varsayılan olarak proje kökündeki `sys/` klasörüne yazılır;
 `CRN_SYS_DIR` ortam değişkeniyle ya da `Ncbi(sys_dir=...)` /
-`Gencode(sys_dir=...)` ile değiştirilebilir.
+`Gencode(sys_dir=...)` / `Hpo(sys_dir=...)` ile değiştirilebilir.
 
 ```python
 from crn import DNA, RNA, PRT, Gene, Features, Strand, GenomicStrand, GeneticCode, ProteinProperties
-from crn.fetch import Ncbi, Gencode, NcbiSession
+from crn.fetch import Ncbi, Gencode, NcbiSession, Hpo
 from crn.cub import (CUB, CubWarning, Composition, Synonymous, Adaptation, EffectiveCodons,
                      Divergence, CodonContext, read_trna_counts)
 from crn.constants import CODONS, AMINO_ACIDS, RNA_BASES
@@ -168,7 +172,7 @@ rows = cub.table(reference=high, file_name="mefv.tsv")   # gen başına 30+ öl�
 
 ## 4. Veri modeli
 
-Her metodun ayrıntısı: [docs/kilavuz.md](docs/kilavuz.md).
+Her metodun ayrıntısı: [doc/seq.md](doc/seq.md), [doc/gene.md](doc/gene.md), [doc/features.md](doc/features.md).
 
 ### 4.1. Diziler
 
@@ -232,6 +236,39 @@ Her iki sınıf da aynı arayüzü verir: `gene(ad)`, `dna(ad)`, `rna(kimlik)`,
 `protein(kimlik)`, `region(kromozom, başlangıç, bitiş, zincir)`, `update(...)`.
 Dönen nesnelerin `features`'ına `source` ve kaynağa özgü kimlikler yazılır;
 transkriptlerde `cds`, `utr5`, `utr3` koordinatları da bulunur.
+
+`Gencode.canonical(ad)` geni yalnızca ana transkripti ve proteiniyle döndürür:
+`MANE_Select`, yoksa `Ensembl_canonical`.
+
+### Semptomdan gen grubuna: `Hpo`
+
+`Hpo`, Human Phenotype Ontology üzerinden semptom teriminden gen listesi çıkarır.
+Terimler alt terimleriyle birlikte sorgulanır; veri bir kez indirilir (~66 MB,
+SHA-256 ile doğrulanır) ve `sys/hpo/<sürüm>/` içinde tutulur.
+
+```python
+from crn.fetch import Hpo
+from crn.cub import DifferentialCodonUsage
+
+hpo = Hpo()
+hpo.search("seizure")                                   # terim ara
+hpo.symbols("Ataxia", min_frequency=0.3, association="MENDELIAN")
+hpo.genes("Seizure", exclude="Autism", evidence=["PCS", "TAS"])
+hpo.diseases("parkinson")
+hpo.phenotypes("SCN1A")
+
+genler = hpo.to_genes("Neurodegeneration")              # List[Gene], CUB'a hazır
+proteinler = hpo.to_sequences("protein", "Ataxia")      # List[PRT]
+hpo.annotate(gen)                                       # terimleri features'a yazar
+
+hpo.pack({"nobet": "Seizure", "ataksi": "Ataxia"}, "gruplar.crn")
+DifferentialCodonUsage.from_crn("gruplar.crn", "nobet", "ataksi")
+```
+
+Filtreler: `term`, `exclude`, `gene`, `disease`, `min_frequency`, `association`,
+`evidence`, `onset`, `inheritance`, `descendants`. HPO'da gen, fenotipe hastalık
+üzerinden bağlıdır. Hastalıkta bulunmadığı yazılı (`NOT`) ve hiç gözlenmemiş
+(`0/N`) kayıtlar yüklenirken çıkarılır.
 
 ```python
 import os
@@ -448,11 +485,11 @@ zincir başına bir H2O, uç grupları ve disülfit eşleri zincir başına).
 - **CDC** Zhang ve ark.'nın bootstrap anlamlılık testini içermez.
 - **Wilkinson–Harrison** sabitleri Davis ve ark. (1999) yeniden
   kalibrasyonundandır; özgün makaleyle doğrulanmalıdır
-  ([docs/dogrulanacak_sabitler.md](docs/dogrulanacak_sabitler.md)).
+  ([doc/tables.md](doc/tables.md#8-kaynağıyla-doğrulanması-gereken-değerler)).
 - **Protein-Sol gibi skorların** model ağırlıkları pakette yoktur;
   `linear_score`'a dışarıdan verilir.
 - Veri modeli ve kaynaklara özgü diğer sınırlılıklar:
-  [docs/kilavuz.md §16](docs/kilavuz.md#16-sınırlılıklar).
+  [doc/sinirliliklar.md](doc/sinirliliklar.md).
 
 ---
 

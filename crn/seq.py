@@ -139,6 +139,31 @@ class Sequence:
         result.features = sequence.features.copy()
         return result
 
+    def sliding(self, window_size: int, step_size: int = 1) -> List[Self]:
+        """Diziyi kayan pencerelere böler; her pencere ``s[a:b]`` ile aynı sınıftadır.
+
+        Pencereler ``seq``'in yazıldığı sırayla, soldan sağa alınır. Yalnızca tam
+        pencereler döner: sonda ``window_size``'dan kısa kalan parça alınmaz.
+
+        Args:
+            window_size: Pencere uzunluğu.
+            step_size: İki pencerenin başlangıçları arasındaki uzaklık.
+
+        Returns:
+            Bu diziyle aynı sınıftan (DNA, RNA, PRT, Sequence), aynı ad ve root
+            alanlarını, features'ın bağımsız kopyasını taşıyan diziler. Dizi
+            ``window_size``'dan kısaysa liste boştur.
+
+        Raises:
+            ValueError: window_size ya da step_size 1'den küçükse.
+        """
+        if window_size < 1:
+            raise ValueError(f"window_size 1 ya da daha büyük olmalı, {window_size} verildi")
+        if step_size < 1:
+            raise ValueError(f"step_size 1 ya da daha büyük olmalı, {step_size} verildi")
+        return [self[start:start + window_size]
+                for start in range(0, len(self) - window_size + 1, step_size)]
+
     # --- Dosyalar (biçimler crn.fileio içinde) ---------------------------------
 
     @classmethod

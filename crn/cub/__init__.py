@@ -1,4 +1,4 @@
-"""Kodon kullanım yanlılığı (A–H) ve protein özellikleri (E).
+"""Kodon kullanım yanlılığı (A–H, J) ve protein özellikleri (E).
 
 ==========  =====================  ==================================================
  Bölüm      Sınıf                  Ölçümler
@@ -11,6 +11,8 @@
  F          ``EffectiveCodons``    ENC, beklenen ENC, nötrallik, PR2, grafikler
  G          ``Divergence``         SCUO, CDC, RCDI, RCBS
  H          ``CodonContext``       tAI, dinükleotit ρ, CPS/CPB
+ J          ``DifferentialCodonUsage``  iki gen grubunun kodon kodon karşılaştırması,
+                                   gen düzeyinde permütasyon (``robust``)
  —          ``CorrespondenceAnalysis``  RSCU'nun uyum çözümlemesi (COA) + saçılım
 ==========  =====================  ==================================================
 
@@ -20,7 +22,7 @@
 Grafik metotları: ``Synonymous.plot_rscu``, ``plot_rscu_heatmap``;
 ``Adaptation.plot_cai``; ``EffectiveCodons.plot_enc``, ``plot_enc_ratio``,
 ``plot_neutrality``, ``plot_pr2``; ``CorrespondenceAnalysis.plot_coa``;
-``plot_correlations``. Hepsi ``ax=``/``file_name=`` alır ve ``Axes`` döner.
+``plot_correlations``; ``DifferentialCodonUsage.plot_volcano``. Hepsi ``ax=``/``file_name=`` alır ve ``Axes`` döner.
 """
 from crn.cub.core import CUB, CubWarning
 from crn.cub.composition import Composition
@@ -30,9 +32,10 @@ from crn.cub.enc import EffectiveCodons
 from crn.cub.divergence import Divergence
 from crn.cub.context import CodonContext, read_trna_counts
 from crn.cub.ordination import CorrespondenceAnalysis
+from crn.cub.differential import DifferentialCodonUsage
 from crn.cub.report import summary_table, correlation_matrix, plot_correlations
 from crn.protein import ProteinProperties
 
 __all__ = ["CUB", "CubWarning", "Composition", "Synonymous", "Adaptation", "ProteinProperties",
            "EffectiveCodons", "Divergence", "CodonContext", "read_trna_counts",
-           "CorrespondenceAnalysis", "summary_table", "correlation_matrix", "plot_correlations"]
+           "CorrespondenceAnalysis", "DifferentialCodonUsage", "summary_table", "correlation_matrix", "plot_correlations"]

@@ -6,3 +6,4 @@ dist/
 .pytest_cache/
 tests/io/out/
 sys/
+test/*/cikti/

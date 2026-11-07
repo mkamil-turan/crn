@@ -302,35 +302,52 @@ class Synonymous:
         return save(ax, file_name)
 
     def plot_rscu_heatmap(self, ax: Optional[Axes] = None, genes: Optional[Sequence[str]] = None,
-                          cmap: str = "YlGnBu", file_name: Optional[str | Path] = None) -> Axes:
+                          cmap: str = "YlGnBu", groups=None,
+                          file_name: Optional[str | Path] = None) -> Axes:
         """15. RSCU ısı haritası: satırlar genler, sütunlar eş anlamlı kodonlar.
 
         Türler/genler arası tercih örüntüsünü ve kümelenmeyi gösterir
         (literatürde sık sık kümelenmiş ısı haritası olarak). ``genes``
-        verilmezse ``cub``'daki tüm genler; 40'tan çok gende satır adları
-        gizlenir.
+        verilmezse ``cub``'daki tüm genler. Satırlar gen sembolüyle yazılır.
+        ``groups`` verilirse satırlar gruplara göre sıralanır, sembol
+        renkleri grubu gösterir ve gruplar arasına ayraç çizilir.
         """
-        from crn.cub._plotting import PLOT_LABEL_SIZE, axes, save
+        import matplotlib.patches as mpatches
+        from crn.cub._plotting import (PLOT_GENE_LABEL_SIZE, PLOT_LABEL_SIZE, axes, gene_groups,
+                                       gene_symbols, group_colors, group_legend, save)
         names = list(genes) if genes is not None else list(self.cub.names)
+        assigned = gene_groups(self.cub, names, groups)
+        if assigned is not None:
+            colors = group_colors(assigned)
+            order = sorted(range(len(names)), key=lambda i: list(colors).index(assigned[i]))
+            names, assigned = [names[i] for i in order], [assigned[i] for i in order]
         codons, amino_acids = self._synonymous_layout()
         matrix = [[self.rscu(name)[codon] for codon in codons] for name in names]
 
-        ax = axes(ax, figsize=(max(8, len(codons) * 0.18), max(3, len(names) * 0.22)))
+        many = len(names) > 40
+        ax = axes(ax, figsize=(max(8, len(codons) * 0.18),
+                               max(3, len(names) * (0.09 if many else 0.22))))
         image = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=0.0,
                           interpolation="nearest")
         ax.set_xticks(range(len(codons)))
         ax.set_xticklabels(codons, rotation=90, fontsize=PLOT_LABEL_SIZE, family="monospace")
-        if len(names) <= 40:
-            ax.set_yticks(range(len(names)))
-            ax.set_yticklabels(names, fontsize=PLOT_LABEL_SIZE)
-        else:
-            ax.set_yticks([])
-            ax.set_ylabel(f"{len(names)} gen")
+        ax.set_yticks(range(len(names)))
+        ax.set_yticklabels(gene_symbols(self.cub, names),
+                           fontsize=PLOT_GENE_LABEL_SIZE if many else PLOT_LABEL_SIZE)
+        if assigned is not None:
+            for tick, group in zip(ax.get_yticklabels(), assigned):
+                tick.set_color(colors[group])
+            for i in range(1, len(names)):
+                if assigned[i] != assigned[i - 1]:
+                    ax.axhline(i - 0.5, color="white", linewidth=1.2)
         # Amino asit grupları arasına ince ayraç çizgileri.
         for i in range(1, len(codons)):
             if amino_acids[i] != amino_acids[i - 1]:
                 ax.axvline(i - 0.5, color="white", linewidth=0.6)
         ax.figure.colorbar(image, ax=ax, label="RSCU", fraction=0.025, pad=0.02)
+        if assigned is not None:
+            group_legend(ax, [mpatches.Patch(color=c, label=g) for g, c in colors.items()])
+            ax.get_legend().set_bbox_to_anchor((1.08, 1.0))   # renk çubuğunun sağına
         ax.set_title("RSCU ısı haritası")
         return save(ax, file_name)
 

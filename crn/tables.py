@@ -2,7 +2,7 @@
 
 Her tablo kaynağıyla birlikte verilir; ölçüm fonksiyonlarına parametre olarak
 girer ve değiştirilebilir. Doğrulanamamış değerler için
-``docs/dogrulanacak_sabitler.md`` dosyasına bakın.
+``doc/tables.md`` dosyasına bakın.
 """
 
 # Amino asit grupları. Alifatik, aromatik, küçük, bazik ve asidik gruplar

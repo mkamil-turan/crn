@@ -1,4 +1,4 @@
-"""Veri kaynaklarının (Ncbi, Gencode) ortak yerel depo ve ilerleme yardımcıları."""
+"""Veri kaynaklarının (Ncbi, Gencode, Hgnc, Hpo) ortak yerel depo ve ilerleme yardımcıları."""
 from __future__ import annotations
 
 import os

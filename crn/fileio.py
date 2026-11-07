@@ -4,7 +4,7 @@ CRN ikili dosya biçimi (tüm sayılar little-endian)::
 
     magic      4 bayt   b"CRN\\x00"
     version    uint16   CRN_VERSION
-    kayıt               dizi kaydı ya da gen kaydı
+    kayıt               dizi kaydı, gen kaydı ya da liste kaydı
     crc32      uint32   magic dahil önceki tüm baytların CRC32'si
 
     dizi kaydı:
@@ -20,6 +20,10 @@ CRN ikili dosya biçimi (tüm sayılar little-endian)::
         has_dna    uint8    1 ise ardından genomik DNA'nın dizi kaydı
         n_transcripts uint32 + n × (id str, dizi kaydı)
         n_proteins    uint32 + n × (id str, dizi kaydı)
+
+    liste kaydı:
+        type       str      "LIST"
+        n_items    uint32 + n × (dizi kaydı ya da gen kaydı)
 
     features: uint32 anahtar sayısı + her anahtar için
               key str, uint32 değer sayısı, etiketli değerler
@@ -53,7 +57,7 @@ if TYPE_CHECKING:
     from crn.gene import Gene
 
 __all__ = ["read_fasta", "write_fasta", "read_crn", "write_crn", "read_gene_crn",
-           "write_gene_crn", "CRN_VERSION"]
+           "write_gene_crn", "read_crn_list", "write_crn_list", "CRN_VERSION"]
 
 CRN_MAGIC = b"CRN\x00"
 CRN_VERSION = 3
@@ -209,8 +213,7 @@ def write_crn(seq: Sequence, file_name: str | Path) -> None:
     _write(file_name, _pack_sequence(seq))
 
 
-def write_gene_crn(gene: Gene, file_name: str | Path) -> None:
-    """Geni (ad, features, genomik DNA, transkriptler, proteinler) CRN dosyasına yazar."""
+def _pack_gene(gene: Gene) -> bytes:
     parts = [_pack_str("GENE"), _pack_str(gene.name), _pack_features(gene.features)]
     if gene.dna is None:
         parts.append(struct.pack("<B", 0))
@@ -220,7 +223,36 @@ def write_gene_crn(gene: Gene, file_name: str | Path) -> None:
         parts.append(struct.pack("<I", len(items)))
         for item_id, seq in items.items():
             parts += [_pack_str(item_id), _pack_sequence(seq)]
-    _write(file_name, b"".join(parts))
+    return b"".join(parts)
+
+
+def write_gene_crn(gene: Gene, file_name: str | Path) -> None:
+    """Geni (ad, features, genomik DNA, transkriptler, proteinler) CRN dosyasına yazar."""
+    _write(file_name, _pack_gene(gene))
+
+
+def write_crn_list(items: Iterable[Sequence | Gene], file_name: str | Path) -> None:
+    """Gene ve Sequence (DNA, RNA, PRT) nesnelerini sırayla tek CRN dosyasına yazar.
+
+    Liste karışık olabilir; dosya varsa üzerine yazılır. Aynı addan birden çok
+    kayıt olmasına izin verilir.
+
+    Raises:
+        TypeError: Bir eleman Gene ya da Sequence değilse ya da desteklenmeyen
+            tipte bir değer içeriyorsa (dosyaya hiçbir şey yazılmaz).
+    """
+    from crn.gene import Gene
+
+    records = []
+    for item in items:
+        if isinstance(item, Sequence):
+            records.append(_pack_sequence(item))
+        elif isinstance(item, Gene):
+            records.append(_pack_gene(item))
+        else:
+            raise TypeError(f"CRN listesi elemanı Gene ya da Sequence olmalı, "
+                            f"{type(item).__name__} verildi")
+    _write(file_name, _pack_str("LIST") + struct.pack("<I", len(records)) + b"".join(records))
 
 
 # --- CRN: okuma ----------------------------------------------------------------
@@ -296,11 +328,16 @@ class _Reader:
                 result.add(key, self.value())
         return result
 
-    def sequence(self, cls: Type[Sequence]) -> Sequence:
-        """Bir dizi kaydı okur; ``cls`` Sequence ise dosyadaki tipin sınıfı seçilir."""
-        type_name = self.text()
+    def sequence(self, cls: Type[Sequence], type_name: Optional[str] = None) -> Sequence:
+        """Bir dizi kaydı okur; ``cls`` Sequence ise dosyadaki tipin sınıfı seçilir.
+
+        ``type_name`` verilmişse kaydın tipi zaten okunmuştur.
+        """
+        type_name = self.text() if type_name is None else type_name
         if type_name == "GENE":
             raise ValueError(f"{self.source}: bu bir gen dosyası; Gene.from_crn ile açın")
+        if type_name == "LIST":
+            raise ValueError(f"{self.source}: bu bir liste dosyası; read_crn_list ile açın")
         if type_name not in Molecule.__members__:
             raise ValueError(f"{self.source}: bilinmeyen dizi tipi: {type_name}")
         molecule = Molecule[type_name]
@@ -320,6 +357,23 @@ class _Reader:
         result = target(seq, name=name, **root)
         result.features = self.features()
         return result
+
+    def gene(self) -> Gene:
+        """Tipi ("GENE") okunmuş bir gen kaydını okur."""
+        from crn.gene import Gene
+        from crn.seq import DNA, RNA, PRT
+
+        gene = Gene(self.text())
+        gene.features = self.features()
+        if self.uint("<B"):
+            gene.dna = self.sequence(DNA)
+        for _ in range(self.uint("<I")):
+            tid = self.text()
+            gene.add_transcript(self.sequence(RNA), tid)
+        for _ in range(self.uint("<I")):
+            pid = self.text()
+            gene.add_protein(self.sequence(PRT), pid)
+        return gene
 
 
 def read_crn(file_name: str | Path, cls: Type[Sequence] = Sequence) -> Sequence:
@@ -342,22 +396,31 @@ def read_gene_crn(file_name: str | Path) -> Gene:
     Raises:
         ValueError: Dosya bir gen dosyası değilse ya da bozuksa.
     """
-    from crn.gene import Gene
-    from crn.seq import DNA, RNA, PRT
-
     reader = _Reader(file_name)
     kind = reader.text()
     if kind != "GENE":
         raise ValueError(f"{reader.source}: gen dosyası değil (dosya tipi: {kind})")
-    gene = Gene(reader.text())
-    gene.features = reader.features()
-    if reader.uint("<B"):
-        gene.dna = reader.sequence(DNA)
-    for _ in range(reader.uint("<I")):
-        tid = reader.text()
-        gene.add_transcript(reader.sequence(RNA), tid)
-    for _ in range(reader.uint("<I")):
-        pid = reader.text()
-        gene.add_protein(reader.sequence(PRT), pid)
+    gene = reader.gene()
     reader.finish()
     return gene
+
+
+def read_crn_list(file_name: str | Path) -> List[Sequence | Gene]:
+    """``write_crn_list`` ile yazılmış dosyayı yazıldığı sırayla liste olarak okur.
+
+    Her eleman dosyadaki tipine uygun sınıftadır: Gene, DNA, RNA, PRT ya da Sequence.
+
+    Raises:
+        FileNotFoundError: Dosya yoksa.
+        ValueError: Dosya bir liste dosyası değilse ya da bozuksa.
+    """
+    reader = _Reader(file_name)
+    kind = reader.text()
+    if kind != "LIST":
+        raise ValueError(f"{reader.source}: liste dosyası değil (dosya tipi: {kind})")
+    items: List[Sequence | Gene] = []
+    for _ in range(reader.uint("<I")):
+        kind = reader.text()
+        items.append(reader.gene() if kind == "GENE" else reader.sequence(Sequence, kind))
+    reader.finish()
+    return items

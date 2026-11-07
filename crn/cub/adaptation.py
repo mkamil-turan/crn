@@ -180,22 +180,22 @@ class Adaptation:
         w = self.relative_adaptiveness()
         return [{"gene": name, "cai": self.cai(name, w=w)} for name in self.cub.names]
 
-    def plot_cai(self, ax: Optional[Axes] = None, bins: int = 20,
+    def plot_cai(self, ax: Optional[Axes] = None, bins: int = 20, groups=None,
                  file_name: Optional[str | Path] = None) -> Axes:
         """19. CAI frekans dağılımı (histogram); referansa uyumun gen havuzundaki yayılımı.
 
         Yüksek CAI referans (yüksek ifadeli) genlere benzer kodon kullanımını
-        gösterir. Kesikli çizgi ortalamadır.
+        gösterir. Kesikli çizgi ortalamadır. ``groups`` verilirse çubuklar
+        gruplara göre renkli ve yığılmış çizilir.
         """
-        from crn.cub._plotting import PLOT_GUIDE_STYLE, PLOT_POINT_STYLE, axes, save
+        from crn.cub._plotting import PLOT_GUIDE_STYLE, axes, histogram, save
         ax = axes(ax)
-        values = [p["cai"] for p in self.cai_points()]
+        values = [(p["gene"], p["cai"]) for p in self.cai_points()]
         if values:
-            ax.hist(values, bins=bins, range=(0, 1),
-                    color=PLOT_POINT_STYLE["color"], edgecolor="white")
-            mean = sum(values) / len(values)
+            mean = sum(v for _, v in values) / len(values)
             ax.axvline(mean, label=f"ortalama = {mean:.3f}", **PLOT_GUIDE_STYLE)
-            ax.legend(loc="upper right", frameon=False, fontsize=8)
+            ax.legend(loc="upper left", frameon=False, fontsize=8)
+            histogram(ax, self.cub, values, bins, groups, range=(0, 1))
         ax.set(xlim=(0, 1), xlabel="CAI", ylabel="Gen sayısı", title="CAI dağılımı")
         return save(ax, file_name)
 

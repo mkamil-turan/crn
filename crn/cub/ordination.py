@@ -176,13 +176,16 @@ class CorrespondenceAnalysis:
         return result
 
     def plot_coa(self, x_axis: int = 1, y_axis: int = 2, ax: Optional[Axes] = None,
-                 labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
+                 labels: bool = False, groups=None,
+                 file_name: Optional[str | Path] = None) -> Axes:
         """COA saçılım grafiği: genler iki eksen üzerinde; atalet oranları eksende.
 
         Args:
             x_axis, y_axis: Çizilecek eksenler (1 tabanlı).
+            labels: True ise noktaların yanına gen sembolü yazılır.
+            groups: Genleri gruplara göre renklendirir (ör. ``"organism"``).
         """
-        from crn.cub._plotting import PLOT_GUIDE_STYLE, PLOT_LABEL_SIZE, PLOT_POINT_STYLE, axes, save
+        from crn.cub._plotting import PLOT_GUIDE_STYLE, axes, save, scatter
         if max(x_axis, y_axis) > len(self.eigenvalues):
             raise ValueError(f"yalnızca {len(self.eigenvalues)} eksen var")
         ax = axes(ax)
@@ -190,11 +193,7 @@ class CorrespondenceAnalysis:
         points = [(row[xi], row[yi], name) for row, name in zip(self._coords, self.genes)]
         ax.axhline(0.0, **PLOT_GUIDE_STYLE)
         ax.axvline(0.0, **PLOT_GUIDE_STYLE)
-        ax.scatter([x for x, _, _ in points], [y for _, y, _ in points], **PLOT_POINT_STYLE)
-        if labels:
-            for x, y, name in points:
-                ax.annotate(name, (x, y), xytext=(3, 3), textcoords="offset points",
-                            fontsize=PLOT_LABEL_SIZE)
+        scatter(ax, self.cub, points, groups, labels)
         ax.set(xlabel=f"Eksen {x_axis} (%{self._inertia[xi] * 100:.1f})",
                ylabel=f"Eksen {y_axis} (%{self._inertia[yi] * 100:.1f})",
                title="Uyum çözümlemesi (COA)")

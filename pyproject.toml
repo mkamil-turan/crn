@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "DNA, RNA ve protein dizileriyle çalışmak için araçlar"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["tqdm>=4.66", "requests>=2.31", "matplotlib>=3.8"]
+dependencies = ["tqdm>=4.66", "requests>=2.31", "matplotlib>=3.8", "scipy>=1.18.0", "numpy>=2.0"]
 
 [tool.setuptools.packages.find]
 include = ["crn*"]

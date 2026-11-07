@@ -49,6 +49,9 @@ Metot                       Grafik
 
 Her ``plot_*`` metodu ``ax`` verilirse onun üzerine, verilmezse yeni bir
 şekle çizer ve ``Axes`` döner; ``file_name`` verilirse şekli kaydeder.
+``labels=True`` noktaların yanına gen sembolünü yazar; ``groups`` genleri
+gruplara göre renklendirip göstergeye koyar (ör. ``groups="organism"``;
+seçenekler ``_plotting.py`` açıklamasında).
 
 Kullanım::
 
@@ -70,40 +73,24 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from crn.cub.core import CUB
 from crn.cub.composition import Composition
+from crn.cub._plotting import (PLOT_POINT_STYLE, PLOT_CURVE_STYLE, PLOT_GUIDE_STYLE,
+                               PLOT_LABEL_SIZE, Groups, axes as _axes, save, scatter, histogram)
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 
-# Grafik ayarları: eksen sınırları, eğri çözünürlüğü, nokta ve çizgi biçimleri.
+# Grafik ayarları: eksen sınırları, eğri çözünürlüğü (biçimler _plotting.py'de).
 ENC_AXIS_LIMITS = (20.0, 61.0)
 ENC_CURVE_STEPS = 200
 ENC_RATIO_BIN_WIDTH = 0.05
-PLOT_POINT_STYLE = {"s": 18, "color": "#2a6fb0", "edgecolor": "none", "alpha": 0.8, "zorder": 3}
-PLOT_CURVE_STYLE = {"color": "#c0392b", "linewidth": 1.4}
-PLOT_GUIDE_STYLE = {"color": "#7f7f7f", "linestyle": "--", "linewidth": 0.8}
-PLOT_LABEL_SIZE = 7
 
 
-def _axes(ax: Optional[Axes]) -> Axes:
-    """Verilen ``Axes``'i, yoksa yeni bir şeklin ``Axes``'ini döner (matplotlib burada yüklenir)."""
-    if ax is None:
-        import matplotlib.pyplot as plt
-        _, ax = plt.subplots(figsize=(5, 4.5))
-    return ax
-
-
-def _finish(ax: Axes, points: Sequence[Tuple[float, float, str]], labels: bool,
-            file_name: Optional[str | Path]) -> Axes:
-    """Noktaları çizer, istenirse gen adlarını yazar ve şekli kaydeder."""
-    ax.scatter([x for x, _, _ in points], [y for _, y, _ in points], **PLOT_POINT_STYLE)
-    if labels:
-        for x, y, name in points:
-            ax.annotate(name, (x, y), xytext=(3, 3), textcoords="offset points",
-                        fontsize=PLOT_LABEL_SIZE)
-    if file_name is not None:
-        ax.figure.savefig(file_name, dpi=300, bbox_inches="tight")
-    return ax
+def _finish(ax: Axes, cub: CUB, points: Sequence[Tuple[float, float, str]], labels: bool,
+            groups: Groups, file_name: Optional[str | Path]) -> Axes:
+    """Noktaları (gruplara göre renkli) çizer, istenirse gen sembollerini yazar, kaydeder."""
+    scatter(ax, cub, points, groups, labels)
+    return save(ax, file_name)
 
 
 def _linear_regression(points: Sequence[Tuple[float, float]]) -> Dict[str, float]:
@@ -252,8 +239,8 @@ class EffectiveCodons:
 
     # --- Çizimler --------------------------------------------------------------------
 
-    def plot_enc(self, ax: Optional[Axes] = None,
-                 labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
+    def plot_enc(self, ax: Optional[Axes] = None, labels: bool = False,
+                 groups: Groups = None, file_name: Optional[str | Path] = None) -> Axes:
         """24. ENC–GC3s grafiği: genler ve Wright'ın beklenen ENC eğrisi.
 
         Eğrinin altında kalan genlerde yanlılık yalnızca GC3s ile açıklanamaz
@@ -266,30 +253,29 @@ class EffectiveCodons:
                   if not math.isnan(p["enc"])]
         ax.set(xlim=(0, 1), ylim=ENC_AXIS_LIMITS, xlabel="GC3s", ylabel="ENC",
                title="ENC–GC3s")
-        ax.legend(loc="lower center", frameon=False)
-        return _finish(ax, points, labels, file_name)
+        ax.legend(loc="lower center", frameon=False, fontsize=8)
+        return _finish(ax, self.cub, points, labels, groups, file_name)
 
     def plot_enc_ratio(self, ax: Optional[Axes] = None,
-                       bin_width: float = ENC_RATIO_BIN_WIDTH,
+                       bin_width: float = ENC_RATIO_BIN_WIDTH, groups: Groups = None,
                        file_name: Optional[str | Path] = None) -> Axes:
         """25. ENC oranının frekans dağılımı; 0'dan uzaklaşan genler GC3s dışı etki taşır."""
         ax = _axes(ax)
-        ratios = [p["enc_ratio"] for p in self.enc_points() if not math.isnan(p["enc_ratio"])]
+        ratios = [(p["gene"], p["enc_ratio"]) for p in self.enc_points()
+                  if not math.isnan(p["enc_ratio"])]
         if ratios:
-            low = math.floor(min(ratios) / bin_width) * bin_width
-            high = math.ceil(max(ratios) / bin_width) * bin_width
+            low = math.floor(min(r for _, r in ratios) / bin_width) * bin_width
+            high = math.ceil(max(r for _, r in ratios) / bin_width) * bin_width
             n_bins = max(1, round((high - low) / bin_width))
-            ax.hist(ratios, bins=[low + i * bin_width for i in range(n_bins + 1)],
-                    color=PLOT_POINT_STYLE["color"], edgecolor="white")
+            histogram(ax, self.cub, ratios, [low + i * bin_width for i in range(n_bins + 1)],
+                      groups)
         ax.axvline(0, **PLOT_GUIDE_STYLE)
         ax.set(xlabel="(ENC beklenen − ENC gözlenen) / ENC beklenen", ylabel="Gen sayısı",
                title="ENC oranı dağılımı")
-        if file_name is not None:
-            ax.figure.savefig(file_name, dpi=300, bbox_inches="tight")
-        return ax
+        return save(ax, file_name)
 
-    def plot_neutrality(self, ax: Optional[Axes] = None,
-                        labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
+    def plot_neutrality(self, ax: Optional[Axes] = None, labels: bool = False,
+                        groups: Groups = None, file_name: Optional[str | Path] = None) -> Axes:
         """26. Nötrallik grafiği: GC12 ~ GC3, regresyon doğrusu, denklem, R² ve y = x.
 
         Tek gende regresyon ``nan`` olduğundan yalnızca nokta çizilir.
@@ -309,10 +295,11 @@ class EffectiveCodons:
         ax.set(xlim=(low, high), ylim=(low, high), xlabel="GC3", ylabel="GC12",
                title="Nötrallik grafiği")
         ax.legend(loc="upper left", frameon=False, fontsize=8)
-        return _finish(ax, points, labels, file_name)
+        return _finish(ax, self.cub, points, labels, groups, file_name)
 
     def plot_pr2(self, codons: Optional[Sequence[str]] = None, ax: Optional[Axes] = None,
-                 labels: bool = False, file_name: Optional[str | Path] = None) -> Axes:
+                 labels: bool = False, groups: Groups = None,
+                 file_name: Optional[str | Path] = None) -> Axes:
         """27. PR2 grafiği: x = G3 / (G3 + C3), y = A3 / (A3 + U3); merkez (0,5; 0,5)."""
         ax = _axes(ax)
         ax.axhline(0.5, **PLOT_GUIDE_STYLE)
@@ -321,7 +308,7 @@ class EffectiveCodons:
         ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="G3 / (G3 + C3)", ylabel="A3 / (A3 + U3)",
                title="PR2 grafiği")
         ax.set_aspect("equal")
-        return _finish(ax, points, labels, file_name)
+        return _finish(ax, self.cub, points, labels, groups, file_name)
 
     def __repr__(self) -> str:
         return f"EffectiveCodons({self.cub!r})"
