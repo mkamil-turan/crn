@@ -2,11 +2,13 @@
 
 Kaynak: [`crn/fetch/ncbi.py`](../../crn/fetch/ncbi.py)
 
-Bir geni NCBI'dan tüm içeriğiyle çeker: genomik DNA, gene bağlı RefSeq RNA'ları (NM_, NR_, XM_, XR_) ve bunların proteinleri. Her kayıt `sys/ncbi/` içinde saklanır, sonraki isteklerde ağa çıkılmaz. Bu sayfadaki `MEFV`, `TP53` gibi örnekler `sys/` içinde kayıt varsa çevrimdışı çalışır.
+Bir geni NCBI'dan tüm içeriğiyle çeker: genomik DNA, gene bağlı RefSeq RNA'ları (NM_, NR_, XM_, XR_) ve bunların proteinleri. Organizma kısa adla (`human`, `mouse` ...) ya da NCBI Taxonomy ID'siyle seçilir, böylece RefSeq'teki herhangi bir organizmanın genine ulaşılır. Her kayıt `sys/ncbi/` içinde saklanır, sonraki isteklerde ağa çıkılmaz. Bu sayfadaki `MEFV`, `TP53` gibi örnekler `sys/` içinde kayıt varsa çevrimdışı çalışır.
 
 ```text
 sys/ncbi/
-    symbols/<organizma>.json      gen sembolü -> NCBI Gene ID
+    symbols/<organizma>.json      gen sembolü -> NCBI Gene ID; ORGANISMS dışındaki
+                                  türde taxid_<taxid>.json
+    taxonomy.json                 taxid -> bilimsel ad, yaygın ad, rank
     genes/<gene_id>.json          genin özeti ve RNA/protein listesi
                                   (update tamamlandığında yazılır)
     nuccore/<erişim>.fa, .ft      transkript dizisi ve özellik tablosu
@@ -17,21 +19,23 @@ sys/ncbi/
 
 <!-- toc -->
 - [1. Sabitler](#1-sabitler)
-- [2. Sınıf](#2-sınıf): [`Ncbi`](#ncbi) · [`ncbi_dir`](#ncbincbi_dir) · [`search_gene`](#ncbisearch_gene) · [`update`](#ncbiupdate) · [`gene`](#ncbigene) · [`dna`](#ncbidna) · [`rna`](#ncbirna) · [`protein`](#ncbiprotein) · [`region`](#ncbiregion)
+- [2. Sınıf](#2-sınıf): [`Ncbi`](#ncbi) · [`taxid`](#ncbitaxid) · [`taxonomy`](#ncbitaxonomy) · [`find_taxid`](#ncbifind_taxid) · [`ncbi_dir`](#ncbincbi_dir) · [`search_gene`](#ncbisearch_gene) · [`update`](#ncbiupdate) · [`gene`](#ncbigene) · [`dna`](#ncbidna) · [`rna`](#ncbirna) · [`protein`](#ncbiprotein) · [`region`](#ncbiregion)
 - [3. İç yardımcılar](#3-iç-yardımcılar)
 <!-- /toc -->
 
 ## 1. Sabitler
 
-`NCBI_URL` E-utilities kök adresidir. `ORGANISMS` desteklenen organizmaları NCBI taxon kimliklerine bağlar: `human`, `mouse`, `rat`, `zebrafish`, `fruit_fly`, `worm`.
+`NCBI_URL` E-utilities kök adresidir. `ORGANISMS` kısa adla seçilebilen organizmaları NCBI Taxonomy ID'lerine bağlar: `human` (9606), `mouse` (10090), `rat` (10116), `zebrafish` (7955), `fruit_fly` (7227), `worm` (6239). Listede olmayan organizma taxid ile seçilir. `TAXON_FIELDS` `taxonomy` kaydının alanlarıdır.
 
 ## 2. Sınıf
 
 ### Ncbi
 
-`Ncbi(organism='human', session=None, sys_dir=None, verbose=True)`
+`Ncbi(organism='human', session=None, sys_dir=None, verbose=True, taxid=None)`
 
-`organism` gen sembolü aramasında kullanılacak organizmadır, `ORGANISMS` dışındaki değer `ValueError` verir. `session` verilmezse API anahtarsız bir `NcbiSession` açılır. `sys_dir` veri klasörü, `verbose` ilerleme çubuklarıdır.
+`organism` gen sembolü aramasında kullanılacak organizmadır: `ORGANISMS` anahtarlarından biri ya da NCBI Taxonomy ID'si (`9031`, `"9031"`, `"taxid:9031"`). `taxid` verilirse `organism` yerine o kullanılır; iki yazım eşdeğerdir, `Ncbi(taxid=9031)` okunurken daha açıktır. Taxid `ORGANISMS`'teki bir organizmaya karşılık geliyorsa `organism` o adı alır (`Ncbi(taxid=9606).organism == "human"`), değilse `"taxid:9031"` olur. Ne ad ne taxid olan değer `ValueError` verir; hata iletisi taxid'in nasıl bulunacağını söyler. Taxid'in NCBI'da var olup olmadığı kurulumda denetlenmez, ağa çıkılmaz; `taxonomy()` denetler. `session` verilmezse API anahtarsız bir `NcbiSession` açılır. `sys_dir` veri klasörü, `verbose` ilerleme çubuklarıdır.
+
+Organizma yalnızca gen sembolü aramasını sınırlar. Gene ID, RefSeq erişimi ve genomik bölgeyle yapılan istekler (`rna("NM_...")`, `region(...)`) organizmadan bağımsızdır. `ORGANISMS`'teki adlar değişmeden çalışır.
 
 ```python
 from crn.fetch import Ncbi
@@ -39,6 +43,35 @@ from crn import GenomicStrand
 
 ncbi = Ncbi(verbose=False)
 print(ncbi.organism, ncbi.SOURCE)  # -> human NCBI
+tavuk = Ncbi(taxid=9031, verbose=False)
+print(tavuk.organism, tavuk.taxid, Ncbi("10090", verbose=False).organism)  # -> taxid:9031 9031 mouse
+```
+
+### Ncbi.taxid
+
+`Ncbi.taxid  (özellik)`
+
+Organizmanın NCBI Taxonomy ID'si. `taxids` aynı değeri demet olarak tutar; gen araması bu demetteki taxid'lerle yapılır.
+
+### Ncbi.taxonomy
+
+`Ncbi.taxonomy(taxid=None)`
+
+Taxid'in NCBI Taxonomy kaydını sözlük olarak verir: `taxid`, `scientific_name`, `common_name`, `rank`, `division`, `status`, `merged_into`. `taxid` verilmezse nesnenin organizması kullanılır. Kayıt `sys/ncbi/taxonomy.json` içinde saklanır, ikinci istekte ağa çıkılmaz. Başka bir taxid ile birleştirilmiş eski kimliklerde `status` `"merged"` olur ve `merged_into` güncel taxid'i verir. Değer taxid değilse `ValueError`, NCBI'da yoksa `KeyError` verir.
+
+```python
+kayit = tavuk.taxonomy()
+print(kayit["scientific_name"], kayit["common_name"], kayit["rank"])  # -> Gallus gallus chicken species
+```
+
+### Ncbi.find_taxid
+
+`Ncbi.find_taxid(name, limit=10)`
+
+Bilimsel ya da yaygın addan (`name`) taxid arar ve bulunan kayıtları `taxonomy` biçiminde, en çok `limit` tane döndürür. Sonuç yoksa boş liste döner. Yaygın adlar dile ve kaynağa göre değiştiği için bilimsel ad daha güvenilir sonuç verir.
+
+```python
+print([(k["taxid"], k["scientific_name"]) for k in ncbi.find_taxid("Schizosaccharomyces pombe")])  # -> [('4896', 'Schizosaccharomyces pombe')]
 ```
 
 ### Ncbi.ncbi_dir
@@ -51,7 +84,7 @@ Verilerin bulunduğu klasör: `sys/ncbi`.
 
 `Ncbi.search_gene(gene)`
 
-Gen sembolünü (`gene`) NCBI Gene ID'sine çevirir. Rakamlardan oluşan değer zaten Gene ID kabul edilir. NCBI araması takma adları da eşleştirdiği için birden çok sonuç varsa resmi sembolü tam tutan gen seçilir (`MIP` için TNPO1 değil MIP), yoksa ilk sonuç alınır. Bulunan eşleşme saklanır. Sembol bulunamazsa `KeyError` verir.
+Gen sembolünü (`gene`) NCBI Gene ID'sine çevirir. Rakamlardan oluşan değer zaten Gene ID kabul edilir. NCBI araması takma adları da eşleştirdiği için birden çok sonuç varsa resmi sembolü tam tutan gen seçilir (`MIP` için TNPO1 değil MIP), yoksa ilk sonuç alınır. Arama önce organizmanın taxid'inde yapılır; sonuç yoksa taxid'in alt düğümleri (suş, alt tür) de taranır. Bu, gen kayıtları suş düzeyinde tutulan türler için gereklidir: tomurcuklanan maya genleri tür taxid'inde (4932) değil S288C suşunda (559292) kayıtlıdır. Ters durumda, suş taxid'i verilip kayıt tür düzeyindeyse (fisyon mayası 284812 yerine 4896) sembol bulunamaz; `taxonomy()` ile rank denetlenmelidir. Bulunan eşleşme saklanır. Sembol bulunamazsa `KeyError` verir.
 
 ```python
 print(ncbi.search_gene("MEFV"), ncbi.search_gene("4210"))  # -> 4210 4210
@@ -76,7 +109,11 @@ Geni bütün içeriğiyle `Gene` olarak döndürür: genomik DNA (koordinat yoks
 ```python
 mefv = ncbi.gene("MEFV")
 print(mefv.name, len(mefv.transcripts) > 0, mefv.features.first("source"))  # -> MEFV True NCBI
+mstn = tavuk.gene("MSTN")
+print(mstn.features.first("organism"), mstn.features.first("taxid"), list(mstn.proteins))  # -> Gallus gallus 9031 ['NP_001001461.1']
 ```
+
+features'a `organism` (bilimsel ad) ve `taxid` yazılır. Bunlar NCBI kaydının kendi değerleridir, sorgunun taxid'i değil. Alt düğüm aramasıyla bulunan maya geninde `taxid` 559292 olur. `taxid` alanından önce indirilmiş genlerde bu alan bulunmaz; `update(gen, force=True)` ile yenilenir.
 
 ### Ncbi.dna
 
@@ -132,7 +169,7 @@ print(len(bolge))
 | `_split_feature_table` | Çok kayıtlı özellik tablosunu (erişim, metin) çiftlerine böler |
 | `_parse_feature_table` | Gen adını, GeneID'yi, ilk CDS'i ve proteinini çıkarır; eksik uç işaretlerini (`<`, `>`) atar |
 | `Ncbi._gene_file` | `genes/<gene_id>.json` yolu |
-| `Ncbi._symbols_file` | Organizmanın sembol önbelleği yolu |
+| `Ncbi._symbols_file` | Organizmanın sembol önbelleği yolu: `ORGANISMS`'teki adla, değilse `taxid_<taxid>.json` |
 | `Ncbi._record_file` | `db/erişim.uzantı` yolu |
 | `Ncbi._cached_accession` | `sys/` içindeki tam erişimi bulur; sürümsüz verilirse en yeni sürümü seçer |
 | `Ncbi._get` | E-utilities uç noktasına oturumla istek atar |

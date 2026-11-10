@@ -53,7 +53,7 @@ from typing import (Any, Dict, Iterable, Iterator, List, Optional, Tuple)
 from crn.constants import DNA_COMPLEMENT, DNA_TO_RNA
 from crn.seq import DNA, RNA, PRT, GenomicStrand
 from crn.gene import Gene
-from crn.fetch._store import LocalSource
+from crn.fetch._store import LocalSource, parse_taxid
 
 
 GENCODE_URL = "https://ftp.ebi.ac.uk/pub/databases/gencode"
@@ -63,6 +63,8 @@ SPECIES = {
     "human": ("Gencode_human", "v"),
     "mouse": ("Gencode_mouse", "vM"),
 }
+# GENCODE yalnızca bu iki türü yayımlar; tür taxid ile de seçilebilir.
+SPECIES_TAXIDS = {"human": "9606", "mouse": "10090"}
 
 _ATTRIBUTE = re.compile(r'(\S+) "([^"]*)"')
 _VERSION = re.compile(r"\.\d+")
@@ -95,7 +97,8 @@ class Gencode(LocalSource):
     """GENCODE sürümünden DNA, RNA, PRT ve Gene nesneleri çıkarır.
 
     Args:
-        species: ``"human"`` ya da ``"mouse"``.
+        species: ``"human"`` ya da ``"mouse"``; NCBI Taxonomy ID de olur
+            (``9606``, ``10090``). Öteki türler için ``Ncbi(taxid=...)`` kullanılır.
         release: ``"v50"``, ``"50"`` ya da fare için ``"vM39"`` gibi bir sürüm.
             None ise ``sys/`` içindeki en yeni hazır sürüm kullanılır; hiç
             yoksa ``update()`` GENCODE'daki en son sürümü indirir.
@@ -110,8 +113,13 @@ class Gencode(LocalSource):
     def __init__(self, species: str = "human", release: Optional[str] = None,
                  sys_dir: Optional[str | Path] = None,
                  base_url: str = GENCODE_URL, verbose: bool = True):
+        number = parse_taxid(species)
+        if number is not None:
+            species = next((name for name, t in SPECIES_TAXIDS.items() if t == number), str(species))
         if species not in SPECIES:
-            raise ValueError(f"Desteklenmeyen tür: {species}; seçenekler: {', '.join(SPECIES)}")
+            raise ValueError(f"Desteklenmeyen tür: {species}; GENCODE yalnızca "
+                             f"{', '.join(f'{n} ({t})' for n, t in SPECIES_TAXIDS.items())} içerir; "
+                             f"öteki türler için Ncbi(taxid=...) kullanın")
         super().__init__(sys_dir, verbose)
         self.species = species
         self.base_url = base_url.rstrip("/")
@@ -128,6 +136,11 @@ class Gencode(LocalSource):
         if release.startswith(prefix):
             return release
         return prefix + release.lstrip("vM")
+
+    @property
+    def taxid(self) -> str:
+        """Türün NCBI Taxonomy ID'si."""
+        return SPECIES_TAXIDS[self.species]
 
     @property
     def species_dir(self) -> Path:
@@ -537,7 +550,7 @@ class Gencode(LocalSource):
             return f.read(size).decode().replace("\n", "").replace("\r", "")
 
     def _features(self, obj, **values) -> None:
-        super()._features(obj, release=self.release, **values)
+        super()._features(obj, release=self.release, taxid=self.taxid, **values)
 
     # --- Sorgular -------------------------------------------------------------
 

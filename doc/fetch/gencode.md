@@ -21,7 +21,7 @@ sys/gencode/<tür>/<sürüm>/          ör. sys/gencode/human/v50/
 
 <!-- toc -->
 - [1. Sabitler ve hata](#1-sabitler-ve-hata): [`AmbiguousGeneError`](#ambiguousgeneerror)
-- [2. Sürüm ve kurulum](#2-sürüm-ve-kurulum): [`Gencode`](#gencode) · [`species_dir`](#gencodespecies_dir) · [`release`](#gencoderelease) · [`release_dir`](#gencoderelease_dir) · [`installed_releases`](#gencodeinstalled_releases) · [`is_ready`](#gencodeis_ready) · [`latest_release`](#gencodelatest_release) · [`update`](#gencodeupdate)
+- [2. Sürüm ve kurulum](#2-sürüm-ve-kurulum): [`Gencode`](#gencode) · [`taxid`](#gencodetaxid) · [`species_dir`](#gencodespecies_dir) · [`release`](#gencoderelease) · [`release_dir`](#gencoderelease_dir) · [`installed_releases`](#gencodeinstalled_releases) · [`is_ready`](#gencodeis_ready) · [`latest_release`](#gencodelatest_release) · [`update`](#gencodeupdate)
 - [3. Sorgu: gen ve transkript listeleri](#3-sorgu-gen-ve-transkript-listeleri): [`gene_types`](#gencodegene_types) · [`transcript_types`](#gencodetranscript_types) · [`genes`](#gencodegenes) · [`transcripts`](#gencodetranscripts) · [`details`](#gencodedetails)
 - [4. Diziler](#4-diziler): [`gene`](#gencodegene) · [`canonical`](#gencodecanonical) · [`dna`](#gencodedna) · [`rna`](#gencoderna) · [`protein`](#gencodeprotein) · [`region`](#gencoderegion)
 - [5. İç yardımcılar](#5-iç-yardımcılar)
@@ -29,7 +29,7 @@ sys/gencode/<tür>/<sürüm>/          ör. sys/gencode/human/v50/
 
 ## 1. Sabitler ve hata
 
-`GENCODE_URL` sunucu adresidir. `SPECIES` desteklenen türleri (`human`, `mouse`) sunucu klasörü ve sürüm önekiyle (`v`, `vM`) eşler. `Gencode.SOURCE` features'a yazılan kaynak adıdır: `GENCODE`.
+`GENCODE_URL` sunucu adresidir. `SPECIES` desteklenen türleri (`human`, `mouse`) sunucu klasörü ve sürüm önekiyle (`v`, `vM`) eşler. `SPECIES_TAXIDS` aynı türlerin NCBI Taxonomy ID'leridir (9606, 10090). GENCODE yalnızca bu iki türü yayımlar. `Gencode.SOURCE` features'a yazılan kaynak adıdır: `GENCODE`.
 
 ### AmbiguousGeneError
 
@@ -53,10 +53,21 @@ print(mesaj[:34])  # -> 'PDE8B' adında birden çok gen var:
 
 `Gencode(species='human', release=None, sys_dir=None, base_url=GENCODE_URL, verbose=True)`
 
-`species` `"human"` ya da `"mouse"`, başka değer `ValueError` verir. `release` `"v50"`, `"50"` ya da fare için `"vM39"` gibi bir sürümdür; `None` ise `sys/` içindeki en yeni hazır sürüm kullanılır, hiç yoksa `update()` sunucudaki en son sürümü indirir. `sys_dir` veri klasörü, `base_url` sunucu adresi, `verbose` ilerleme çubuklarıdır.
+`species` `"human"` ya da `"mouse"`, ya da bunların taxid'i (`9606`, `10090`). Başka değer `ValueError` verir; GENCODE'un kapsamadığı türler için hata iletisi `Ncbi(taxid=...)` önerir. `release` `"v50"`, `"50"` ya da fare için `"vM39"` gibi bir sürümdür; `None` ise `sys/` içindeki en yeni hazır sürüm kullanılır, hiç yoksa `update()` sunucudaki en son sürümü indirir. `sys_dir` veri klasörü, `base_url` sunucu adresi, `verbose` ilerleme çubuklarıdır.
 
 ```python
 print(Gencode(species="human", release="50", verbose=False).release)  # -> v50
+print(Gencode(species=9606, release="50", verbose=False).species)  # -> human
+```
+
+### Gencode.taxid
+
+`Gencode.taxid  (özellik)`
+
+Türün NCBI Taxonomy ID'si. Kurulan her nesnenin features'ına `taxid` olarak da yazılır.
+
+```python
+print(Gencode(verbose=False).taxid)  # -> 9606
 ```
 
 ### Gencode.species_dir

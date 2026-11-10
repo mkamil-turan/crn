@@ -8,7 +8,9 @@ yoksa ``Ncbi.update()`` ile NCBI'dan indirilir. İstekler ``NcbiSession``
 ``sys/`` klasörünün yapısı::
 
     sys/ncbi/
-        symbols/<organizma>.json        gen sembolü -> NCBI Gene ID
+        symbols/<organizma>.json        gen sembolü -> NCBI Gene ID (taxid ile
+                                        kurulan bilinmeyen türde taxid_<taxid>.json)
+        taxonomy.json                   taxid -> bilimsel ad, yaygın ad, rank
         genes/<gene_id>.json            genin özeti ve RNA/protein listesi
                                         (update tamamlandığında yazılır)
         nuccore/<erişim>.fa, .ft        transkript dizisi ve özellik tablosu
@@ -21,6 +23,7 @@ Kullanım::
     from crn.fetch import Ncbi
 
     ncbi = Ncbi()                       # insan; NcbiSession kendiliğinden açılır
+    tavuk = Ncbi(taxid=9031)            # herhangi bir organizma NCBI Taxonomy ID ile
     ncbi.update("MEFV")                 # isteğe bağlı: indir (yoksa ilk istekte yapılır)
     mefv = ncbi.gene("MEFV")            # Gene: genomik DNA + tüm RefSeq RNA'lar + proteinler
     dna = ncbi.dna("MEFV")              # genin genomik DNA'sı (kodlayan zincir, 5'->3')
@@ -39,13 +42,14 @@ from typing import (Any, Dict, Iterator, List, Optional, Tuple)
 from crn.constants import DNA_TO_RNA
 from crn.seq import DNA, RNA, PRT, GenomicStrand
 from crn.gene import Gene
-from crn.fetch._store import LocalSource, atomic_write, split_fasta, read_single_fasta
+from crn.fetch._store import LocalSource, atomic_write, parse_taxid, split_fasta, read_single_fasta
 from crn.fetch.session import NcbiSession
 
 
 NCBI_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-# organizma -> NCBI Taxonomy ID'leri
+# Kısa adla seçilebilen organizmalar -> NCBI Taxonomy ID'leri. Listede olmayan
+# organizma taxid ile seçilir: Ncbi(taxid=9031).
 ORGANISMS = {
     "human":     ("9606",),
     "mouse":     ("10090",),
@@ -54,6 +58,9 @@ ORGANISMS = {
     "fruit_fly": ("7227",),
     "worm":      ("6239",),
 }
+
+# taxonomy() kaydının alanları, döndürülme sırasıyla.
+TAXON_FIELDS = ("taxid", "scientific_name", "common_name", "rank", "division", "status", "merged_into")
 
 # Tek istekte indirilecek en çok kayıt.
 _BATCH = 100
@@ -106,25 +113,51 @@ class Ncbi(LocalSource):
     """NCBI'dan DNA, RNA, PRT ve Gene nesneleri çıkarır.
 
     Args:
-        organism: Gen sembolü aramasında kullanılacak organizma
-            (``ORGANISMS`` anahtarlarından biri).
+        organism: Gen sembolü aramasında kullanılacak organizma:
+            ``ORGANISMS`` anahtarlarından biri ya da NCBI Taxonomy ID'si
+            (``9031``, ``"9031"``, ``"taxid:9031"``).
         session: HTTP oturumu; verilmezse API anahtarsız bir ``NcbiSession``
             açılır (saniyede 3 istek).
         sys_dir: Verilerin tutulacağı klasör; varsayılan proje kökündeki ``sys/``.
         verbose: True ise indirme ve okuma adımları ilerleme çubuklarıyla
             (tqdm) gösterilir.
+        taxid: Organizmanın NCBI Taxonomy ID'si; verilirse ``organism`` yerine
+            kullanılır. Bir türün taxid'i ``find_taxid`` ile bulunur.
+
+    Organizma yalnızca gen sembolü aramasını sınırlar. Gene ID, RefSeq erişimi
+    ve genomik bölgeyle yapılan istekler her organizmada aynı çalışır. Taxid'in
+    NCBI'da varlığı kurulumda denetlenmez (ağa çıkılmaz); ``taxonomy()`` denetler.
+
+    Raises:
+        ValueError: Organizma ne ``ORGANISMS`` içinde ne de bir taxid ise.
     """
 
     SOURCE = "NCBI"
 
-    def __init__(self, organism: str = "human", session: Optional[NcbiSession] = None,
-                 sys_dir: Optional[str | Path] = None, verbose: bool = True):
-        if organism not in ORGANISMS:
-            raise ValueError(f"Desteklenmeyen organizma: {organism}; "
-                             f"seçenekler: {', '.join(ORGANISMS)}")
+    def __init__(self, organism: str | int = "human", session: Optional[NcbiSession] = None,
+                 sys_dir: Optional[str | Path] = None, verbose: bool = True,
+                 taxid: Optional[str | int] = None):
+        choice = organism if taxid is None else taxid
+        number = parse_taxid(choice)
+        if number is not None:
+            known = next((name for name, ids in ORGANISMS.items() if ids == (number,)), None)
+            self.taxids: Tuple[str, ...] = (number,)
+            self.organism = known or f"taxid:{number}"
+        elif taxid is None and choice in ORGANISMS:
+            self.taxids = ORGANISMS[choice]
+            self.organism = str(choice)
+        else:
+            raise ValueError(f"Desteklenmeyen organizma: {choice}; seçenekler: "
+                             f"{', '.join(ORGANISMS)} ya da bir NCBI Taxonomy ID (ör. 9031). "
+                             f"Taxid'i bulmak için: Ncbi().find_taxid({str(choice)!r}) "
+                             f"ya da crn taxonomy {str(choice)!r}")
         super().__init__(sys_dir, verbose)
-        self.organism = organism
         self.session = session if session is not None else NcbiSession()
+
+    @property
+    def taxid(self) -> str:
+        """Organizmanın NCBI Taxonomy ID'si."""
+        return self.taxids[0]
 
     # --- Klasörler ------------------------------------------------------------
 
@@ -136,7 +169,8 @@ class Ncbi(LocalSource):
         return self.ncbi_dir / "genes" / f"{gene_id}.json"
 
     def _symbols_file(self) -> Path:
-        return self.ncbi_dir / "symbols" / f"{self.organism}.json"
+        name = self.organism if self.organism in ORGANISMS else f"taxid_{self.taxid}"
+        return self.ncbi_dir / "symbols" / f"{name}.json"
 
     def _record_file(self, db: str, accession: str, suffix: str) -> Path:
         return self.ncbi_dir / db / f"{accession}.{suffix}"
@@ -175,8 +209,12 @@ class Ncbi(LocalSource):
         Bulunan eşleşmeler sys/ içinde saklanır; aynı sembol tekrar sorulduğunda
         ağa çıkılmaz.
 
+        Arama önce organizmanın taxid'inde yapılır. Sonuç yoksa taxid'in alt
+        düğümleri (suş, alt tür) de taranır: maya genleri tür taxid'inde (4932)
+        değil S288C suşunda (559292) kayıtlıdır.
+
         Raises:
-            KeyError: Sembol bu organizmada bulunamazsa.
+            KeyError: Sembol bu organizmada ve alt düğümlerinde bulunamazsa.
         """
         gene = str(gene)
         if gene.isdigit():
@@ -186,12 +224,18 @@ class Ncbi(LocalSource):
         if gene in symbols:
             return symbols[gene]
 
-        taxa = " OR ".join(f"{taxon}[Taxonomy ID]" for taxon in ORGANISMS[self.organism])
-        term = f"{gene}[Gene Name] AND ({taxa}) AND alive[prop]"
-        data = self._get("esearch.fcgi", db="gene", term=term, retmode="json").json()
-        ids = data.get("esearchresult", {}).get("idlist", [])
+        ids: List[str] = []
+        for field in ("{}[Taxonomy ID]", "txid{}[Organism:exp]"):
+            taxa = " OR ".join(field.format(taxon) for taxon in self.taxids)
+            term = f"{gene}[Gene Name] AND ({taxa}) AND alive[prop]"
+            data = self._get("esearch.fcgi", db="gene", term=term, retmode="json").json()
+            ids = data.get("esearchresult", {}).get("idlist", [])
+            if ids:
+                break
         if not ids:
-            raise KeyError(f"NCBI: '{gene}' geni {self.organism} organizmasında bulunamadı")
+            hint = ("" if self.organism in ORGANISMS else "; taxid'in rankını taxonomy() ile "
+                    "denetleyin (suş taxid'i yerine tür taxid'i gerekebilir)")
+            raise KeyError(f"NCBI: '{gene}' geni {self.organism} organizmasında bulunamadı{hint}")
         found = ids[0]
         if len(ids) > 1:
             summaries = self._get("esummary.fcgi", db="gene", id=",".join(ids),
@@ -201,6 +245,49 @@ class Ncbi(LocalSource):
         symbols[gene] = found
         atomic_write(symbols_file, json.dumps(symbols, indent=1, sort_keys=True))
         return found
+
+    # --- Taksonomi -------------------------------------------------------------
+
+    def taxonomy(self, taxid: Optional[str | int] = None) -> Dict[str, Any]:
+        """Taxid'in NCBI Taxonomy kaydı: bilimsel ad, yaygın ad, rank, bölüm.
+
+        ``taxid`` verilmezse nesnenin organizması kullanılır. Kayıt
+        ``sys/ncbi/taxonomy.json`` içinde saklanır, ikinci istekte ağa çıkılmaz.
+        Birleştirilmiş (eski) taxid'lerde ``status`` ``"merged"`` olur ve
+        ``merged_into`` güncel taxid'i verir.
+
+        Raises:
+            ValueError: Değer taxid değilse.
+            KeyError: Taxid NCBI'da yoksa.
+        """
+        number = parse_taxid(self.taxid if taxid is None else taxid)
+        if number is None:
+            raise ValueError(f"Geçersiz taxid: {taxid}")
+        cache_file = self.ncbi_dir / "taxonomy.json"
+        cache = json.loads(cache_file.read_text()) if cache_file.is_file() else {}
+        if number in cache:
+            return {key: cache[number].get(key, "") for key in TAXON_FIELDS}
+        data = self._get("esummary.fcgi", db="taxonomy", id=number, retmode="json").json()
+        found = data.get("result", {}).get(number)
+        if not found or "error" in found:
+            raise KeyError(f"NCBI Taxonomy: {number} bulunamadı")
+        record = {"taxid": number, "scientific_name": found.get("scientificname", ""),
+                  "common_name": found.get("commonname", ""), "rank": found.get("rank", ""),
+                  "division": found.get("division", ""), "status": found.get("status", ""),
+                  "merged_into": str(found.get("akataxid") or "")}
+        cache[number] = record
+        atomic_write(cache_file, json.dumps(cache, indent=1, sort_keys=True))
+        return record
+
+    def find_taxid(self, name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Bilimsel ya da yaygın addan (``"Gallus gallus"``, ``"chicken"``) taxid arar.
+
+        NCBI Taxonomy araması yapılır; bulunan kayıtlar ``taxonomy`` biçiminde,
+        en çok ``limit`` tane döner. Sonuç yoksa boş liste döner.
+        """
+        data = self._get("esearch.fcgi", db="taxonomy", term=name, retmax=limit,
+                         retmode="json").json()
+        return [self.taxonomy(number) for number in data.get("esearchresult", {}).get("idlist", [])]
 
     def _summary(self, gene_id: str) -> Dict[str, Any]:
         data = self._get("esummary.fcgi", db="gene", id=gene_id, retmode="json").json()
@@ -274,6 +361,7 @@ class Ncbi(LocalSource):
             "gene_name": summary.get("name", ""),
             "description": summary.get("description", ""),
             "organism": organism.get("scientificname", ""),
+            "taxid": str(organism.get("taxid") or ""),
             "chromosome": summary.get("chromosome", ""),
             "map_location": summary.get("maplocation", ""),
             "aliases": [a.strip() for a in summary.get("otheraliases", "").split(",") if a.strip()],
@@ -500,6 +588,7 @@ class Ncbi(LocalSource):
         region = record["region"]
         self._features(result, gene_id=record["gene_id"], gene_name=record["gene_name"],
                        description=record["description"], organism=record["organism"],
+                       taxid=record.get("taxid"),
                        chromosome=record["chromosome"], map_location=record["map_location"])
         for alias in record["aliases"]:
             result.features.add("aliases", alias)

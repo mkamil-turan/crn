@@ -1,4 +1,4 @@
-"""Veri kaynaklarının (Ncbi, Gencode, Hgnc, Hpo) ortak yerel depo ve ilerleme yardımcıları."""
+"""Veri kaynaklarının (Ncbi, Gencode, Hgnc, Hpo, Clinvar) ortak yerel depo, ilerleme ve taxid yardımcıları."""
 from __future__ import annotations
 
 import os
@@ -25,6 +25,24 @@ def split_fasta(text: str) -> Iterator[Tuple[str, str]]:
     for block in re.split(r"(?m)^(?=>)", text):
         if block.startswith(">"):
             yield block[1:].split(None, 1)[0], block.rstrip("\n") + "\n"
+
+
+_TAXID = re.compile(r"(?:taxid|txid|taxon)?[:_ ]?([1-9]\d*)", re.IGNORECASE)
+
+
+def parse_taxid(value: object) -> Optional[str]:
+    """NCBI Taxonomy ID yazımını rakam dizisine çevirir; taxid değilse None.
+
+    ``9606``, ``"9606"``, ``"taxid:9606"``, ``"txid9606"`` hepsi ``"9606"`` olur.
+    Ad gibi taxid olmayan değerler (``"human"``) None döner; böylece aynı
+    parametre hem organizma adını hem taxid'i kabul edebilir.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    match = _TAXID.fullmatch(str(value).strip())
+    return match.group(1) if match else None
 
 
 def read_single_fasta(path: Path) -> Tuple[str, str]:

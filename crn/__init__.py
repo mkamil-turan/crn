@@ -11,7 +11,8 @@
     ├── fileio     FASTA ve CRN dosyaları
     ├── protein    ProteinProperties (E-A … E-G)
     ├── fetch      Ncbi, Gencode, NcbiSession, Hgnc, Hpo
-    └── cub        CUB ve A–H bölümleri
+    ├── cub        CUB ve A–H bölümleri
+    └── cli        komut satırı arayüzü (crn komutu)
 """
 from crn.constants import GeneticCode
 from crn.features import Features

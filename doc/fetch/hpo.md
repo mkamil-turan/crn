@@ -298,6 +298,8 @@ print(type(dizi[0]).__name__, dizi[0].seq[:8])  # -> PRT MKSNQERS
 
 ### Hpo.pack
 
+Taban sınıftan ([`GeneSetSource.pack`](_geneset.md#genesetsourcepack)) gelir; `Hpo`'da grup değeri sözlük değilse `term` filtresine aktarılır.
+
 `Hpo.pack(groups, file_name, source=None, key='group', overlap='exclude', **filters)`
 
 Gen gruplarını tek CRN listesine yazar; dosya `DifferentialCodonUsage.from_crn` ile doğrudan açılır. `groups` grup adından terime, terim listesine ya da gruba özel filtrelere giden sözlüktür (`{"term": "Ataxia", "min_frequency": 0.3}`). `file_name` yazılacak dosyadır. `source` `to_genes` ile aynıdır, `key` grup anahtarıdır. `overlap` birden çok gruba giren genler içindir: `"exclude"` hepsinden çıkarır (varsayılan, çünkü iki gruptaki gen farkı siler), `"first"` ilk grupta bırakır, `"error"` hata verir. `**filters` bütün gruplara uygulanır.
@@ -330,6 +332,7 @@ print(open("atxn1.tsv").readline().split("\t")[1])  # -> gene_symbol
 | `_DEFINITION` | OBO `def` satırının düzenli ifadesi |
 | `_NO_SYMBOL` | Sembolsüz gen işareti (`-`) |
 | `_FEATURE_KEYS` | `annotate`'in sıfırladığı features anahtarları |
+| `Hpo.FEATURE_KEYS`, `Hpo.RELEASE_KEY`, `Hpo.GROUP_FILTER` | Taban sınıfın kancaları (bkz. [_geneset.md](_geneset.md#1-alt-sınıfın-sağladıkları)) |
 | `_as_list` | Tek değeri listeye sarar, `None`'ı boş liste yapar |
 | `Hpo.__repr__` | `Hpo('v2026-09-01', '<sys>/hpo')` |
 | `Hpo._normalize_release` | `"2026-09-01"` → `"v2026-09-01"` |
@@ -345,9 +348,7 @@ print(open("atxn1.tsv").readline().split("\t")[1])  # -> gene_symbol
 | `Hpo._terms` | Sorguyu terim kümesine çevirir, alt terimleri ekler |
 | `Hpo._gene_ids` | Sembol ya da Gene ID listesini kimlik kümesine çevirir |
 | `Hpo._disease_ids` | Hastalık sorgusunu kimlik kümesine çevirir |
-| `Hpo._check_choices` | Değerin izin verilen listede olduğunu denetler |
 | `Hpo._write_features` | Satırlardaki terim ve hastalıkları tekrarsız yazar |
-| `Hpo._gencode` | Varsayılan `Gencode` nesnesini bir kez açar |
-| `Hpo._canonical` | Ana transkripti alır, aynı adlı kayıtları ayırır: tek kodlayan kayıt (CAST) ya da HGNC üzerinden Ensembl kimliği (SHOX, PDE8B) |
-| `Hpo._isoform` | Genin tek DNA, tek transkript, tek proteinli halini kurar; ana transkriptin ORF'u uymazsa (PANK2) başka transkripte geçer |
-| `Hpo._build` | Gen listesini `Gene` nesnelerine çevirir, atlananları nedenleriyle toplar |
+| `Hpo._describe` | `_build` kancası: kurulan gene süzgeçten geçen HPO terim ve hastalıklarını yazar |
+
+`Hpo`, `GeneSetSource` tabanından türer. `pack` ve `write_tsv` ile `_check_choices`, `_gencode`, `_canonical`, `_isoform`, `_build`, `_to_genes`, `_to_sequences` yardımcıları bu tabanda tanımlıdır ve `Clinvar` ile paylaşılır; ayrıntı [_geneset.md](_geneset.md) belgesindedir.

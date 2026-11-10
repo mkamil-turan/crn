@@ -7,8 +7,9 @@ Paketin bilinçli olarak yapmadıkları ve sık karşılaşılan hatalar bu sayf
 - [2. CUB ölçümleri](#2-cub-ölçümleri)
 - [3. Diferansiyel kodon kullanımı](#3-diferansiyel-kodon-kullanımı)
 - [4. HPO](#4-hpo)
-- [5. Sabitler](#5-sabitler)
-- [6. Sık hatalar](#6-sık-hatalar)
+- [5. ClinVar](#5-clinvar)
+- [6. Sabitler](#6-sabitler)
+- [7. Sık hatalar](#7-sık-hatalar)
 <!-- /toc -->
 
 ## 1. Diziler ve dönüşümler
@@ -45,11 +46,23 @@ Gen-fenotip ilişkisi hastalık üzerindendir ve ilişki etiketleri güvenilir d
 
 `Gencode` kapsamı dışındaki semboller, protein kodlamayan genler ve ORF'u proteine eşleşmeyen genler `to_genes` tarafından atlanır. `pack` raporundaki `skipped` sözlüğü nedenleri listeler; bir grubun ne kadarının düştüğünü her zaman kontrol edin.
 
-## 5. Sabitler
+## 5. ClinVar
+
+`significance="pathogenic"` yalnızca gönderenlerin uzlaştığı varyantları verir. Çelişkili sınıflandırmalar (`conflicting`, 2026-11'de 183.872 varyant) patojen sayılmaz; bir genin patojen varyant sayısı bu yüzden gerçek yükün alt sınırıdır. Yıldızsız (0) sınıflandırmalar da sonuca girer, çalışma kümesi için `min_stars` verin. Ayrıntı [clinvar.md](fetch/clinvar.md#1-yorumlarken-bilinmesi-gerekenler).
+
+`effect` varyant adındaki HGVS protein yazımından kurallarla çıkarılır, etki tahmini yapılmaz. Ekleme bölgesini bozan eşanlamlı bir varyant `synonymous` görünür; 2026-11'de patojen sınıfta 474 eşanlamlı varyant vardır ve bunların patojenliği amino asit değişiminden gelmez. Protein yazımı olmayan varyantlarda `effect` boştur ve `effect` süzgeci bunları dışarıda bırakır.
+
+`max_genes` varsayılan olarak 1'dir. Bu, büyük delesyonların gen sayımlarını şişirmesini önler, ama iki komşu geni birlikte listeleyen küçük varyantları da çıkarır. Sayımlar beklenenden düşükse `max_genes=None` ile karşılaştırın.
+
+Hastalık adları gönderildiği biçimdedir, aynı hastalık birden çok adla geçer. Ad parçasıyla arama hem eksik hem fazla sonuç verebilir; yayımlanacak analizde OMIM ya da MONDO kimliği kullanın.
+
+NCBI aylık arşivler için MD5 yayımlamaz. İndirme boyut ve gzip CRC32 ile denetlenir, SHA-256 manifest'e yazılır; aynı sürümün başka bir makinede aynı veriyi verdiği bu özetle karşılaştırılarak doğrulanır.
+
+## 6. Sabitler
 
 Bazı ölçeklerin ve Wilkinson-Harrison sabitlerinin özgün kaynakla doğrulanması gerekir: [tables.md](tables.md#8-kaynağıyla-doğrulanması-gereken-değerler).
 
-## 6. Sık hatalar
+## 7. Sık hatalar
 
 | Belirti | Neden | Çözüm |
 |---|---|---|

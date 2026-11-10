@@ -72,16 +72,12 @@ import json
 import re
 import urllib.error
 import urllib.request
-import warnings
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence as Seq, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from crn import fileio
-from crn.fetch._store import LocalSource
-from crn.fetch.gencode import AmbiguousGeneError, Gencode
-from crn.fetch.hgnc import Hgnc
+from crn.fetch._geneset import SEQUENCE_KINDS, GeneSetSource  # noqa: F401  (SEQUENCE_KINDS geriye uyum)
 from crn.gene import Gene
 from crn.seq import Sequence
 
@@ -92,7 +88,6 @@ PHENOTYPE_ROOT = "HP:0000118"       # Phenotypic abnormality
 ONSET_ROOT = "HP:0003674"           # Onset
 ASSOCIATIONS = ("MENDELIAN", "POLYGENIC", "UNKNOWN")
 EVIDENCES = ("PCS", "TAS", "IEA")
-SEQUENCE_KINDS = ("dna", "rna", "protein")
 
 # HPO sıklık terimlerinin tanımındaki alt sınırlar.
 FREQUENCY_TERMS = {"HP:0040280": 1.0, "HP:0040281": 0.80, "HP:0040282": 0.30,
@@ -132,7 +127,7 @@ def frequency_value(frequency: str) -> Optional[float]:
     return None
 
 
-class Hpo(LocalSource):
+class Hpo(GeneSetSource):
     """HPO terimleri, gen-fenotip notları ve crn nesnelerine dönüşüm.
 
     Args:
@@ -144,6 +139,9 @@ class Hpo(LocalSource):
     """
 
     SOURCE = "HPO"
+    FEATURE_KEYS = _FEATURE_KEYS
+    RELEASE_KEY = "hpo_release"
+    GROUP_FILTER = "term"
 
     def __init__(self, release: Optional[str] = None, sys_dir: Optional[str | Path] = None,
                  verbose: bool = True):
@@ -151,7 +149,6 @@ class Hpo(LocalSource):
         self.__requested = self._normalize_release(release) if release else None
         self.__release = self.__requested
         self.__data: Optional[dict] = None
-        self.__gencode: Optional[Gencode] = None
 
     # --- Sürüm ve klasörler -------------------------------------------------
 
@@ -543,13 +540,6 @@ class Hpo(LocalSource):
             raise ValueError(f"Hastalık bulunamadı: {query}; aramak için diseases() kullanın")
         return ids
 
-    @staticmethod
-    def _check_choices(name: str, values: List[str], allowed: Seq[str]) -> None:
-        unknown = [value for value in values if value not in allowed]
-        if unknown:
-            raise ValueError(f"Bilinmeyen {name}: {', '.join(map(str, unknown))}; "
-                             f"seçenekler: {', '.join(allowed)}")
-
     def annotations(self, term: Optional[TermQuery] = None, *, exclude: Optional[TermQuery] = None,
                     gene: Optional[Filter] = None, disease: Optional[Filter] = None,
                     min_frequency: Optional[float] = None,
@@ -741,71 +731,9 @@ class Hpo(LocalSource):
         self._write_features(obj, self.annotations(term, gene=symbol, **filters))
         return obj
 
-    def _gencode(self) -> Gencode:
-        if self.__gencode is None:
-            self.__gencode = Gencode(sys_dir=self.sys_dir, verbose=False)
-        return self.__gencode
-
-    def _canonical(self, source: Gencode, gene_id: str, symbol: str) -> Gene:
-        """Sembolle ana transkript; aynı adlı GENCODE kayıtları ayrılarak.
-
-        Ad birden çok kayda uyarsa tek protein kodlayan kayıt alınır (CAST). İkisi
-        de kodluyorsa (SHOX, PDE8B) HPO'nun NCBI kimliği HGNC'de Ensembl kimliğine
-        çevrilir; HGNC yerelde yoksa hata aynen geçer.
-        """
-        try:
-            return source.canonical(symbol)
-        except AmbiguousGeneError:
-            coding = source.genes(gene_type="protein_coding", name=f"^{re.escape(symbol)}$")
-            if len(coding) == 1:
-                return source.canonical(coding[0]["gene_id"])
-            hgnc = Hgnc(sys_dir=self.sys_dir, verbose=False)
-            if not hgnc.is_ready():
-                raise
-            rows = hgnc.query(entrez_id=gene_id, fields=["ensembl_gene_id"])
-            if not rows or not rows[0]["ensembl_gene_id"]:
-                raise
-            return source.canonical(rows[0]["ensembl_gene_id"])
-
-    def _isoform(self, source: Any, gene_id: str, symbol: str) -> Gene:
-        """Genin tek DNA, tek transkript ve tek proteinli hali (CUB'un istediği biçim)."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")     # izoform ayıklama bildirimleri
-            if isinstance(source, Gencode):
-                if not symbol:
-                    raise ValueError("gen sembolü yok")
-                canonical = self._canonical(source, gene_id, symbol)
-                isoforms = canonical.isoforms()
-                if not isoforms:        # PANK2 gibi ana transkriptin ORF'u eşleşmeyen genler
-                    isoforms = source.gene(canonical.features.first("gene_id")).isoforms()
-                    for gene in isoforms:
-                        gene.features.set("canonical_tag", "other_transcript")
-            else:
-                isoforms = source.gene(gene_id).isoforms()
-                preferred = [g for g in isoforms
-                             if str(g.features.first("transcript_id")).startswith("NM_")]
-                isoforms = preferred or isoforms
-        if not isoforms:
-            raise ValueError("protein ve transkript eşleşmedi")
-        return isoforms[0]
-
-    def _build(self, wanted: List[Dict[str, Any]], source: Any, group: Optional[str],
-               key: str, filters: Dict[str, Any], desc: str
-               ) -> Tuple[List[Gene], Dict[str, str]]:
-        source = source if source is not None else self._gencode()
-        genes, skipped = [], {}
-        for row in self._progress(wanted, desc, "gen"):
-            label = row["gene_symbol"] or row["ncbi_gene_id"]
-            try:
-                gene = self._isoform(source, row["ncbi_gene_id"], row["gene_symbol"])
-            except (KeyError, ValueError, RuntimeError) as error:
-                skipped[label] = str(error).strip("'\"")
-                continue
-            self._write_features(gene, self.annotations(**{**filters, "gene": row["ncbi_gene_id"]}))
-            if group is not None:
-                gene.features.set(key, group)
-            genes.append(gene)
-        return genes, skipped
+    def _describe(self, gene: Gene, row: Dict[str, Any], filters: Dict[str, Any]) -> None:
+        """``_build`` kancası: genin süzgeçten geçen HPO terim ve hastalıklarını yazar."""
+        self._write_features(gene, self.annotations(**{**filters, "gene": row["ncbi_gene_id"]}))
 
     def to_genes(self, term: Optional[TermQuery] = None, source: Any = None,
                  group: Optional[str] = None, key: str = "group", **filters: Any) -> List[Gene]:
@@ -826,13 +754,7 @@ class Hpo(LocalSource):
             key: Grup anahtarı.
             **filters: ``annotations`` filtreleri.
         """
-        filters = {"term": term, **filters}
-        genes, skipped = self._build(self.genes(**filters), source, group, key, filters,
-                                     "Genler çıkarılıyor")
-        if skipped:
-            warnings.warn(f"{len(skipped)} gen atlandı: {', '.join(sorted(skipped)[:10])}"
-                          f"{' ...' if len(skipped) > 10 else ''}", UserWarning, stacklevel=2)
-        return genes
+        return self._to_genes({"term": term, **filters}, source, group, key)
 
     def to_sequences(self, kind: str, term: Optional[TermQuery] = None, source: Any = None,
                      **filters: Any) -> List[Sequence]:
@@ -849,98 +771,7 @@ class Hpo(LocalSource):
         Raises:
             ValueError: kind geçersizse.
         """
-        self._check_choices("kind", [kind], SEQUENCE_KINDS)
-        sequences = []
-        for gene in self.to_genes(term, source, **filters):
-            if kind == "dna":
-                item = gene.dna
-            elif kind == "rna":
-                item = next(iter(gene.transcripts.values()))
-            else:
-                item = next(iter(gene.proteins.values()))
-            item.features.set("gene_name", gene.features.first("gene_name"))
-            for name in _FEATURE_KEYS:
-                item.features.remove(name)
-                for value in gene.features.get(name, []):
-                    item.features.add(name, value)
-            item.features.set("hpo_release", self.release)
-            sequences.append(item)
-        return sequences
-
-    def pack(self, groups: Dict[str, Any], file_name: str | Path, source: Any = None,
-             key: str = "group", overlap: str = "exclude", **filters: Any) -> Dict[str, Any]:
-        """Gen gruplarını tek CRN listesine yazar.
-
-        Dosya ``DifferentialCodonUsage.from_crn`` ile doğrudan açılır; genin
-        grubu features'ta ``key`` anahtarındadır.
-
-        Args:
-            groups: grup adı -> terim, terim listesi ya da gruba özel filtreler
-                (ör. ``{"term": "Ataxia", "min_frequency": 0.3}``).
-            file_name: Yazılacak CRN dosyası.
-            source: ``to_genes`` ile aynı.
-            key: Grup anahtarı.
-            overlap: Birden çok gruba giren gen için ``"exclude"`` (hepsinden
-                çıkar, varsayılan), ``"first"`` (ilk grupta kalır) ya da ``"error"``.
-            **filters: Tüm gruplara uygulanan ``annotations`` filtreleri.
-
-        Returns:
-            ``file, release, groups`` (grup -> gen sayısı), ``overlap`` (çakışan
-            semboller) ve ``skipped`` (atlanan gen -> neden).
-
-        Raises:
-            ValueError: overlap geçersizse, gruplar çakışıyorsa (``"error"``) ya
-                da bir grup boş kalırsa.
-        """
-        self._check_choices("overlap", [overlap], ("exclude", "first", "error"))
-        if not groups:
-            raise ValueError("En az bir grup gerekli")
-        wanted: Dict[str, List[Dict[str, Any]]] = {}
-        settings: Dict[str, Dict[str, Any]] = {}
-        owners: Dict[str, List[str]] = defaultdict(list)
-        labels: Dict[str, str] = {}
-        for name, spec in groups.items():
-            settings[name] = {**filters, **(spec if isinstance(spec, dict) else {"term": spec})}
-            wanted[name] = self.genes(**settings[name])
-            for row in wanted[name]:
-                owners[row["ncbi_gene_id"]].append(name)
-                labels[row["ncbi_gene_id"]] = row["gene_symbol"] or row["ncbi_gene_id"]
-
-        shared = {gene_id: names for gene_id, names in owners.items() if len(names) > 1}
-        if shared and overlap == "error":
-            raise ValueError(f"{len(shared)} gen birden çok grupta: "
-                             f"{', '.join(sorted(labels[g] for g in shared)[:10])}")
-        for name in wanted:
-            wanted[name] = [row for row in wanted[name] if row["ncbi_gene_id"] not in shared
-                            or (overlap == "first" and shared[row["ncbi_gene_id"]][0] == name)]
-        if shared:
-            warnings.warn(f"{len(shared)} gen birden çok grupta; overlap='{overlap}' uygulandı",
-                          UserWarning, stacklevel=2)
-
-        items: List[Gene] = []
-        skipped: Dict[str, str] = {}
-        counts: Dict[str, int] = {}
-        for name in wanted:
-            genes, missed = self._build(wanted[name], source, name, key, settings[name],
-                                        f"{name} genleri")
-            if not genes:
-                raise ValueError(f"'{name}' grubunda gen kalmadı")
-            items += genes
-            skipped.update(missed)
-            counts[name] = len(genes)
-        fileio.write_crn_list(items, file_name)
-        return {"file": str(file_name), "release": self.release, "groups": counts,
-                "overlap": sorted(labels[g] for g in shared), "skipped": skipped}
-
-    @staticmethod
-    def write_tsv(rows: Seq[Dict[str, Any]], file_name: str | Path) -> None:
-        """Sorgu sonucunu sekmeyle ayrılmış dosyaya yazar."""
-        if not rows:
-            raise ValueError("Yazılacak satır yok")
-        with open(file_name, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0]), delimiter="\t", lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
+        return self._to_sequences(kind, {"term": term, **filters}, source)
 
     def __repr__(self) -> str:
         return f"Hpo({self.release!r}, {str(self.hpo_dir)!r})"

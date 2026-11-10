@@ -6,7 +6,7 @@ Veri kaynaklarının paylaştığı küçük yardımcılar. Modül içe aktarıl
 
 <!-- toc -->
 - [1. Depo konumu](#1-depo-konumu)
-- [2. Dosya yardımcıları](#2-dosya-yardımcıları): [`atomic_write`](#atomic_write) · [`split_fasta`](#split_fasta) · [`read_single_fasta`](#read_single_fasta)
+- [2. Dosya yardımcıları](#2-dosya-yardımcıları): [`atomic_write`](#atomic_write) · [`split_fasta`](#split_fasta) · [`read_single_fasta`](#read_single_fasta) · [`parse_taxid`](#parse_taxid)
 - [3. Taban sınıf](#3-taban-sınıf): [`LocalSource`](#localsource)
 - [4. İç yardımcılar](#4-iç-yardımcılar)
 <!-- /toc -->
@@ -49,6 +49,17 @@ print([k for k, _ in split_fasta(">a x\nAT\n>b\nGC\n")])  # -> ['a', 'b']
 
 ```python
 print(read_single_fasta(Path("a.fa")))  # -> ('kayit bir', 'ATGCGG')
+```
+
+### parse_taxid
+
+`parse_taxid(value)`
+
+NCBI Taxonomy ID yazımını (`value`) rakam dizisine çevirir: `9606`, `"9606"`, `"taxid:9606"` ve `"txid9606"` hepsi `"9606"` olur. Taxid olmayan değer (`"human"`, `0`, `True`) `None` döner. `Ncbi`, `Gencode` ve `Hgnc` aynı parametrede hem adı hem taxid'i bu işlevle ayırır. Desen `_TAXID` sabitindedir.
+
+```python
+from crn.fetch._store import parse_taxid
+print([parse_taxid(v) for v in (9606, "taxid:9031", "txid7955", "human")])  # -> ['9606', '9031', '7955', None]
 ```
 
 ## 3. Taban sınıf

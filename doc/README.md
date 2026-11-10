@@ -1,6 +1,6 @@
 # crn belgeleri
 
-`crn`, moleküler biyolojinin santral dogmasını (DNA → RNA → protein) Python nesneleriyle modelleyen, gerçek veriyi NCBI, GENCODE, HGNC ve HPO'dan alan, kodon kullanımını ve protein özelliklerini ölçen bir kütüphanedir. Bu klasör paketin başvuru belgesidir: `crn/` altındaki her dosyanın burada aynı yolda bir karşılığı vardır, her sınıf, fonksiyon, metot ve sabit bu dosyalarda anlatılır.
+`crn`, moleküler biyolojinin santral dogmasını (DNA → RNA → protein) Python nesneleriyle modelleyen, gerçek veriyi NCBI, GENCODE, HGNC, HPO ve ClinVar'dan alan, kodon kullanımını ve protein özelliklerini ölçen bir kütüphanedir. Bu klasör paketin başvuru belgesidir: `crn/` altındaki her dosyanın burada aynı yolda bir karşılığı vardır, her sınıf, fonksiyon, metot ve sabit bu dosyalarda anlatılır.
 
 ## 1. Nereden başlamalı
 
@@ -9,7 +9,9 @@
 | Bir diziyi yüklemek, çevirmek, ORF bulmak | [seq.md](seq.md) |
 | Bir geni transkript ve proteinleriyle tutmak | [gene.md](gene.md) |
 | Bir geni NCBI ya da GENCODE'dan indirmek | [fetch/README.md](fetch/README.md) |
+| Terminalden çalışmak | [cli.md](cli.md) |
 | Semptomdan gen listesi çıkarmak | [fetch/hpo.md](fetch/hpo.md) |
+| Klinik varyantlardan gen ve hastalık listesi çıkarmak | [fetch/clinvar.md](fetch/clinvar.md) |
 | Kodon kullanımını ölçmek | [cub/README.md](cub/README.md) |
 | İki gen grubunu karşılaştırmak | [cub/differential.md](cub/differential.md) |
 | Protein özelliklerini hesaplamak | [protein.md](protein.md) |
@@ -27,13 +29,16 @@
 | `crn/gene.py` | [gene.md](gene.md) | `Gene` |
 | `crn/fileio.py` | [fileio.md](fileio.md) | FASTA ve CRN dosyaları |
 | `crn/protein.py` | [protein.md](protein.md) | `ProteinProperties` |
+| `crn/cli.py` | [cli.md](cli.md) | `crn` komutu |
 | `crn/fetch/__init__.py` | [fetch/README.md](fetch/README.md) | Veri kaynaklarının karşılaştırması |
 | `crn/fetch/_store.py` | [fetch/_store.md](fetch/_store.md) | `LocalSource`, ortak dosya yardımcıları |
 | `crn/fetch/session.py` | [fetch/session.md](fetch/session.md) | `NcbiSession` |
 | `crn/fetch/ncbi.py` | [fetch/ncbi.md](fetch/ncbi.md) | `Ncbi` |
 | `crn/fetch/gencode.py` | [fetch/gencode.md](fetch/gencode.md) | `Gencode`, `AmbiguousGeneError` |
 | `crn/fetch/hgnc.py` | [fetch/hgnc.md](fetch/hgnc.md) | `Hgnc` |
+| `crn/fetch/_geneset.py` | [fetch/_geneset.md](fetch/_geneset.md) | `GeneSetSource`: `Hpo` ve `Clinvar` için ortak gen listesi işlemleri |
 | `crn/fetch/hpo.py` | [fetch/hpo.md](fetch/hpo.md) | `Hpo` |
+| `crn/fetch/clinvar.py` | [fetch/clinvar.md](fetch/clinvar.md) | `Clinvar` |
 | `crn/cub/__init__.py` | [cub/README.md](cub/README.md) | CUB bölümleri ve ortak kurallar |
 | `crn/cub/core.py` | [cub/core.md](cub/core.md) | A: `CUB` |
 | `crn/cub/composition.py` | [cub/composition.md](cub/composition.md) | B: `Composition` |
